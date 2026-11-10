@@ -586,6 +586,7 @@ object SourceRegistry {
         // Same protocol, same implementation — the kinds differ only in rank.
         SourceKind.CUSTOM_MODULE -> ModuleSource(config)
         SourceKind.MODULE -> ModuleSource(config)
+        SourceKind.MORNYE -> MorneyeSource(config)
         SourceKind.JIOSAAVN -> JioSaavnSource(config)
         SourceKind.YOUTUBE -> YouTubeSource(config)
     }
@@ -632,6 +633,42 @@ object SourceRegistry {
             .toString()
 
     private val BUILT_IN_KINDS = listOf(SourceKind.JIOSAAVN, SourceKind.YOUTUBE)
+
+    // ── Mornye extension sync ────────────────────────────────────────────
+
+    /**
+     * Called by [MorneyePackageManager] whenever installed packages change so
+     * that the registry's source list stays in sync with what is installed.
+     *
+     * Each enabled package gets a [SourceConfig] with kind [SourceKind.MORNYE]
+     * and [SourceConfig.baseUrl] set to the addon's storage key (the stable
+       per-addon identifier). Disabled packages are kept so the toggle survives
+     * the next launch.
+     */
+    fun syncMorneyePackages(packages: List<com.music.bitchord.data.sources.mornye.InstalledMorneyePackage>) {
+        val current = configs.value
+        val byKey = current.filter { it.kind == SourceKind.MORNYE }.associateBy { it.baseUrl }
+
+        val newMornye = packages.map { pkg ->
+            byKey[pkg.key]?.copy(
+                label   = pkg.displayName,
+                enabled = pkg.enabled,
+            ) ?: SourceConfig(
+                kind    = SourceKind.MORNYE,
+                label   = pkg.displayName,
+                baseUrl = pkg.key,          // key is stored in baseUrl
+                enabled = pkg.enabled,
+            )
+        }
+
+        // Replace all existing MORNYE configs with the refreshed list.
+        val nonMornye = current.filterNot { it.kind == SourceKind.MORNYE }
+        val updated = nonMornye + newMornye
+        if (updated.map { it.id } != current.map { it.id } ||
+            updated.map { it.enabled } != current.map { it.enabled }) {
+            publish(updated)
+        }
+    }
 
     private const val KEY_SOURCES = "sources"
     /** One-shot migration: existing users must explicitly opt in again. */

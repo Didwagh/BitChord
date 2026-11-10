@@ -82,6 +82,23 @@ enum class SourceKind(
     ),
 
     /**
+     * An installed Mornye / Spotiflac extension (.sflx, .morneye-ext).
+     *
+     * Sandboxed QuickJS execution runtime supporting search, stream resolution,
+     * and metadata extraction. Streams flow directly into BitChord's playback
+     * and AudioCache pipeline.
+     */
+    MORNYE(
+        label = "Mornye",
+        detail = "Installed Mornye / Spotiflac extension (.sflx / .morneye-ext). Sandboxed JS runtime.",
+        labels = listOf("Extensions", "Lossless", "FLAC"),
+        needsServer = false,
+        canServeLossless = true,
+        worthPrefetching = true,
+        rank = 0,
+    ),
+
+    /**
      * A module index the user pointed at themselves.
      *
      * Legacy, and no longer offered: the sources screen has no way to add one

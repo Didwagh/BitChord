@@ -19,6 +19,7 @@ sealed interface AppRoute {
     data object Settings : AppRoute
     data object AccountScrobbling : AppRoute
     data object Sources : AppRoute
+    data object Mornye : AppRoute
     data object ListenTogether : AppRoute
     data object WearOs : AppRoute
     data object Equalizer : AppRoute

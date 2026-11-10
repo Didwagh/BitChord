@@ -3067,6 +3067,11 @@ private fun BitChordApp(
                                 onEditWebDav = { showWebDavEditor = true },
                                 onEditSmb = { showSmbEditor = true },
                                 onConfirmJioSaavn = { confirmJioSaavn = true },
+                                onOpenMornye = { navigator.push(AppRoute.Mornye) },
+                            )
+                        } else if (pageRoute == AppRoute.Mornye) {
+                            com.music.bitchord.ui.screens.MorneyeScreen(
+                                onBack = { navigator.pop() },
                             )
                         } else if (pageRoute == AppRoute.Downloads) {
                             DownloadManagerPage(
@@ -3794,6 +3799,7 @@ private fun BitChordApp(
                         AppRoute.Moods -> stringResource(R.string.find_your_mood)
                         AppRoute.AccountScrobbling -> stringResource(R.string.account_scrobbling)
                         AppRoute.Sources -> stringResource(R.string.sources)
+                        AppRoute.Mornye -> "Mornye Extensions"
                         AppRoute.ListenTogether -> stringResource(R.string.listen_together)
                         AppRoute.WearOs -> stringResource(R.string.wear_os_page_title)
                         AppRoute.Equalizer -> stringResource(R.string.equalizer)

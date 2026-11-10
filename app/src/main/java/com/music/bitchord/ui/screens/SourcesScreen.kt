@@ -125,6 +125,8 @@ fun SourcesScreen(
     onEditSmb: () -> Unit,
     /** Opens the full-window warning before JioSaavn is opted into. */
     onConfirmJioSaavn: () -> Unit,
+    /** Opens the Mornye extension manager page. */
+    onOpenMornye: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
@@ -301,6 +303,8 @@ fun SourcesScreen(
             AddSourceRow(
                 onClick = { onEditSource(SourceConfig(kind = SourceKind.ADDON)) },
             )
+            RowDivider()
+            MorneyeSourceRow(onClick = onOpenMornye)
         }
 
         // A personal library rather than a catalogue in the order above: it
@@ -684,6 +688,46 @@ private fun AddSourceRow(onClick: () -> Unit) {
     }
 }
 
+@Composable
+private fun MorneyeSourceRow(
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .clickable(
+                onClickLabel = "Mornye extensions",
+                onClick = onClick,
+            )
+            .heightIn(min = 60.dp)
+            .padding(horizontal = ROW_INSET, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Spacer(Modifier.width(24.dp))
+        Icon(
+            imageVector = SfIcons.Extension,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.size(ICON_SIZE),
+        )
+        Spacer(Modifier.width(ICON_GAP))
+        Column(Modifier.weight(1f)) {
+            Text(
+                text = "Mornye Extensions",
+                style = MaterialTheme.typography.bodyLarge,
+                color = MaterialTheme.colorScheme.primary,
+            )
+            Text(
+                text = "Manage JavaScript add-ons (.sflx / .morneye-ext)",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 2,
+            )
+        }
+    }
+}
+
 /**
  * Asks for Nearby devices so the Bluetooth codec can be read — the only way an
  * LDAC, LHDC or SSC UHQ headset qualifies for an addon's `checkValidLossless`. Draws
@@ -817,6 +861,7 @@ private fun SourceRow(
                 SourceKind.ADDON -> SfIcons.Extension
                 SourceKind.CUSTOM_MODULE -> SfIcons.Extension
                 SourceKind.MODULE -> SfIcons.Extension
+                SourceKind.MORNYE -> SfIcons.Extension
                 SourceKind.JIOSAAVN -> SfIcons.GraphicEq // or some other icon
                 SourceKind.YOUTUBE -> SfIcons.PlayCircle
             },
