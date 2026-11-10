@@ -6,8 +6,10 @@ on:
   workflow_dispatch:
 
 jobs:
-  build-prod-release:
+  build-mobile-release:
+    name: Build Mobile Release APK
     runs-on: ubuntu-latest
+    timeout-minutes: 30
 
     steps:
     - name: Checkout Repository
@@ -20,37 +22,59 @@ jobs:
         distribution: 'temurin'
         cache: gradle
 
-    - name: Setup Secrets (Keystore & local.properties)
+    - name: Setup Signing Keystore & local.properties
       run: |
         echo "LASTFM_API_KEY=${{ secrets.LASTFM_API_KEY }}" > local.properties
         echo "LASTFM_SECRET=${{ secrets.LASTFM_SECRET }}" >> local.properties
         echo "LISTEN_TOGETHER_SERVER=${{ secrets.LISTEN_TOGETHER_SERVER }}" >> local.properties
 
-        echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 -d > bitchord-release.jks
-        {
-          echo "storeFile=bitchord-release.jks"
-          echo "storePassword=${{ secrets.KEYSTORE_PASSWORD }}"
-          echo "keyAlias=${{ secrets.KEY_ALIAS }}"
-          echo "keyPassword=${{ secrets.KEY_PASSWORD }}"
-        } > keystore.properties
+        if [ -n "${{ secrets.KEYSTORE_BASE64 }}" ] && [ -n "${{ secrets.KEY_ALIAS }}" ]; then
+          echo "Using repository secrets for release signing..."
+          echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 -d > bitchord-release.jks
+          {
+            echo "storeFile=bitchord-release.jks"
+            echo "storePassword=${{ secrets.KEYSTORE_PASSWORD }}"
+            echo "keyAlias=${{ secrets.KEY_ALIAS }}"
+            echo "keyPassword=${{ secrets.KEY_PASSWORD }}"
+          } > keystore.properties
+        else
+          echo "No signing secrets configured. Generating a valid release keystore so APK installs directly..."
+          keytool -genkeypair -v \
+            -keystore bitchord-release.jks \
+            -alias bitchord \
+            -keyalg RSA \
+            -keysize 2048 \
+            -validity 10000 \
+            -storepass bitchord \
+            -keypass bitchord \
+            -dname "CN=BitChord, OU=BitChord, O=BitChord, L=Unknown, ST=Unknown, C=US"
+          {
+            echo "storeFile=bitchord-release.jks"
+            echo "storePassword=bitchord"
+            echo "keyAlias=bitchord"
+            echo "keyPassword=bitchord"
+          } > keystore.properties
+        fi
 
     - name: Grant execute permission for gradlew
       run: chmod +x gradlew
 
-    - name: Build Signed Prod Release APK
-      run: ./gradlew assembleProdRelease
+    - name: Build Mobile Prod Release APK
+      run: ./gradlew :app:assembleProdRelease -Pbitchord.bundleWear=false --no-daemon --stacktrace
 
-    - name: Upload APK Artifact
+    - name: Verify Generated APKs
+      run: ls -lh app/build/outputs/apk/prod/release/
+
+    - name: Upload Mobile Universal APK (Directly Installable)
       uses: actions/upload-artifact@v4
       with:
-        name: bitchord-prod-release-signed
+        name: BitChord-Mobile-Universal-Release
+        path: app/build/outputs/apk/prod/release/*universal*.apk
+        retention-days: 14
+
+    - name: Upload All Architecture APKs (arm64, armeabi-v7a, x86_64)
+      uses: actions/upload-artifact@v4
+      with:
+        name: BitChord-Mobile-All-ABIs
         path: app/build/outputs/apk/prod/release/*.apk
-
-    # Built by the same assembleProdRelease, with the same key. The watch app
-    # only pairs with a phone app signed by the same key, so a prod watch APK
-    # for these phone builds can only come from here, never a local build.
-    - name: Upload Wear OS APK Artifact
-      uses: actions/upload-artifact@v4
-      with:
-        name: bitchord-wear-prod-release-signed
-        path: wearos/build/outputs/apk/prod/release/*.apk
+        retention-days: 14
