@@ -112,6 +112,14 @@ class BitChordApplication : Application(), SingletonImageLoader.Factory, Configu
         // nothing that runs after startup can see any of them half open.
         val backgroundInit = thread(name = "startup-init") {
             SourceRegistry.init(this)
+            // Mornye extensions: load installed packages and wire them into the
+            // source registry so they participate in the same prefetch pipeline.
+            com.music.bitchord.data.sources.mornye.MorneyePackageManager.init(this)
+            CoroutineScope(Dispatchers.IO).launch {
+                com.music.bitchord.data.sources.mornye.MorneyePackageManager.packages.collect { pkgs ->
+                    SourceRegistry.syncMorneyePackages(pkgs)
+                }
+            }
             AndroidStreamHooks.initInnerTubeX(this)
             // Its own directory: canvas clips are looping video, not audio, and
             // belong in a cache AudioCache's own limit and eviction policy were
@@ -142,9 +150,6 @@ class BitChordApplication : Application(), SingletonImageLoader.Factory, Configu
             CoroutineScope(Dispatchers.IO).launch { Innertube.ensureSessionScope() }
         }
         AppSettings.init(this, authStore)
-        // Restores the addon token, so the first search after a process restart
-        // doesn't have to attest the device again.
-        com.music.bitchord.data.sources.addon.AddonAuth.init(this)
         // Before anything resolves a track: an addon with `checkValidLossless`
         // is gated on this, and the gate reads "no" until it has looked.
         com.music.bitchord.playback.audio.LosslessOutput.init(this)
@@ -175,13 +180,6 @@ class BitChordApplication : Application(), SingletonImageLoader.Factory, Configu
         // One cache directory can only be opened once per process, and
         // PlaybackService shares this one — so it's opened here, not there.
         AudioCache.init(this)
-        // Mornye / Spotiflac extension manager (.sflx / .morneye-ext packages)
-        com.music.bitchord.data.sources.mornye.MorneyePackageManager.init(this)
-        CoroutineScope(Dispatchers.IO).launch {
-            com.music.bitchord.data.sources.mornye.MorneyePackageManager.packages.collect { pkgs ->
-                SourceRegistry.syncMorneyePackages(pkgs)
-            }
-        }
         // The offscreen WebView that mints a Spotify access token from the
         // listener's own session cookie needs a Context, and nothing in the
         // suspend call chain that reaches it (a track's canvas lookup) has

@@ -82,23 +82,6 @@ enum class SourceKind(
     ),
 
     /**
-     * An installed Mornye / Spotiflac extension (.sflx, .morneye-ext).
-     *
-     * Sandboxed QuickJS execution runtime supporting search, stream resolution,
-     * and metadata extraction. Streams flow directly into BitChord's playback
-     * and AudioCache pipeline.
-     */
-    MORNYE(
-        label = "Mornye",
-        detail = "Installed Mornye / Spotiflac extension (.sflx / .morneye-ext). Sandboxed JS runtime.",
-        labels = listOf("Extensions", "Lossless", "FLAC"),
-        needsServer = false,
-        canServeLossless = true,
-        worthPrefetching = true,
-        rank = 0,
-    ),
-
-    /**
      * A module index the user pointed at themselves.
      *
      * Legacy, and no longer offered: the sources screen has no way to add one
@@ -141,6 +124,31 @@ enum class SourceKind(
         labels = listOf("FLAC", "Lossless", "Hi-Res", "Plugins"),
         needsServer = true,
         canServeLossless = true,
+        rank = 1,
+    ),
+
+    /**
+     * A locally installed Mornye extension (.sflx / .morneye-ext package).
+     *
+     * Extensions are JavaScript plugins that run in a sandboxed QuickJS engine
+     * on-device.  They expose `searchTracks()` and `download()` methods, whose
+     * results flow through BitChord's existing [AudioCache] so the next track is
+     * prefetched while the current one plays — no gaps, and the bytes land in
+     * the same ExoPlayer SimpleCache the Download sheet already exports from.
+     *
+     * This kind sits between ADDON and JIOSAAVN in the walk: a user-configured
+     * HTTP addon is asked first (rank 0), then installed Mornye extensions
+     * (rank 1), then JioSaavn, then YouTube.
+     */
+    MORNYE(
+        label = "Mornye Extension",
+        detail = "A locally installed Mornye add-on (.sflx / .morneye-ext). " +
+            "Extensions run as sandboxed JavaScript on your device and can supply " +
+            "FLAC, ALAC and other lossless streams from your authorised services.",
+        labels = listOf("FLAC", "Lossless", "Local JS"),
+        needsServer = false,
+        canServeLossless = true,
+        worthPrefetching = true,
         rank = 1,
     ),
 

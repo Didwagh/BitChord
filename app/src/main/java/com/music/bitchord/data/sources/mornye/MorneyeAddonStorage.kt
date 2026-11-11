@@ -15,7 +15,7 @@ import com.music.bitchord.auth.EncryptedPrefs
  *  - `storage`     — arbitrary JSON (settings, caches, session tokens).
  *  - `credentials` — sensitive tokens, same backing store but `c:` prefix.
  */
-class MorneyeAddonStorage(
+internal class MorneyeAddonStorage(
     private val context: Context,
     private val addonKey: String,
 ) {

@@ -65,7 +65,6 @@ class MorneyeSource(
 
         val rt = runCatching { runtime() }.getOrNull()
             ?: return@withContext SourceHealth.Unreachable("Addon could not start")
-        runCatching { rt.ensureInitialized() }
 
         return@withContext if (rt.methods.isNotEmpty()) {
             SourceHealth.Ok("v${pkg.version} · ${rt.methods.size} methods")
@@ -154,9 +153,14 @@ class MorneyeSource(
                 }
             }.onFailure { TrackLog.d(TAG, "[$addonKey] initialize: ${it.message}") }
 
+            // The trackId we store in Song.videoId is the full composite key
+            // "src:<configId>::<addonTrackId>". Strip the prefix back to the
+            // raw addon-side ID before passing it to the addon's download().
+            val rawTrackId = SourceTrackKeys.parse(trackId)?.second ?: trackId
+
             val qualityId = resolveQuality(request)
             val downloadArgs = buildList {
-                add(trackId)
+                add(rawTrackId)
                 add(qualityId)
                 add(mapOf("forPlayback" to true))
             }

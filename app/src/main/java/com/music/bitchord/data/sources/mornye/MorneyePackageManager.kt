@@ -40,7 +40,7 @@ object MorneyePackageManager {
     private const val TAG = "BitChord/Mornye"
     private const val REGISTRY_URL =
         "https://raw.githubusercontent.com/mornyeapp/Mornye-Extension/refs/heads/main/registry.json"
-    private const val COMPAT_VERSION = "5.3.0"
+    private const val COMPAT_VERSION = "5.1.0"
     private const val PREFS_KEY = "mornye_packages"
     private const val PREFS_REGISTRY = "mornye_registry"
 
@@ -175,7 +175,14 @@ object MorneyePackageManager {
      */
     suspend fun fetchRegistry(): List<MorneyeRegistryEntry> = withContext(Dispatchers.IO) {
         val bytes = httpFetch(REGISTRY_URL)
-        val array = JSONArray(bytes.toString(Charsets.UTF_8))
+        val body = bytes.toString(Charsets.UTF_8)
+        // Registry format: {"version":1,"extensions":[{...},...]}
+        // Fall back to treating the whole body as a plain array for older registry shapes.
+        val array: JSONArray = runCatching {
+            JSONObject(body).getJSONArray("extensions")
+        }.getOrElse {
+            JSONArray(body)
+        }
         val installed = _packages.value.associateBy { it.name }
         (0 until array.length()).mapNotNull { i ->
             runCatching {
