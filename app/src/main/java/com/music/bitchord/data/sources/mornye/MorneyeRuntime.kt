@@ -35,6 +35,8 @@ internal class MorneyeRuntime(
     private val addonKey: String,
     private val jsCode: String,
     private val packageDir: File,
+    /** Directory where the addon may write temporary and downloaded files. */
+    private val cacheDir: File,
     private val storage: MorneyeAddonStorage,
     private val settingsJson: String = "{}",
     private val permissions: Set<String> = setOf("network", "storage"),
@@ -104,6 +106,7 @@ internal class MorneyeRuntime(
         val bridge = MorneyeHostBridge(
             storage = storage,
             packageDir = packageDir,
+            cacheDir = cacheDir.also { it.mkdirs() },
             invokeCallback = { _, _ -> """{"value":null}""" },
         )
 

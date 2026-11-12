@@ -318,7 +318,10 @@ object SourceResolver {
     fun directAddons(): List<MusicSource> {
         val active = SourceRegistry.activeForPlayback()
         val youtube = active.firstOrNull { it.kind == SourceKind.YOUTUBE } ?: return emptyList()
-        return rankedAbove(youtube.configId, active).filter { it.kind == SourceKind.ADDON }
+        // Include MORNYE alongside ADDON — both are user-added sources that can
+        // serve Direct Source Stream and prefetch substitutes for YouTube tracks.
+        return rankedAbove(youtube.configId, active)
+            .filter { it.kind == SourceKind.ADDON || it.kind == SourceKind.MORNYE }
     }
 
     /**

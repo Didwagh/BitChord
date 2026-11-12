@@ -47,6 +47,9 @@ object MorneyePackageManager {
     private lateinit var context: Context
     private lateinit var prefs: SharedPreferences
     private lateinit var packagesDir: File
+    /** Where addon download() calls may write temp files — <cacheDir>/mornye/<addonKey>/ */
+    lateinit var downloadCacheDir: File
+        private set
 
     private val json = Json { ignoreUnknownKeys = true; isLenient = true; explicitNulls = false }
     private val _packages = MutableStateFlow<List<InstalledMorneyePackage>>(emptyList())
@@ -61,6 +64,7 @@ object MorneyePackageManager {
     fun init(context: Context) {
         this.context = context.applicationContext
         this.packagesDir = File(context.filesDir, "mornye/packages").also { it.mkdirs() }
+        this.downloadCacheDir = File(context.cacheDir, "mornye").also { it.mkdirs() }
         this.prefs = context.getSharedPreferences("mornye_meta", Context.MODE_PRIVATE)
         _packages.value = loadPersistedPackages()
     }
@@ -255,10 +259,12 @@ object MorneyePackageManager {
             val perms = manifest.optJSONArray("permissions") ?: JSONArray()
             (0 until perms.length()).map { perms.getString(it) }.toSet()
         }.getOrDefault(setOf("network", "storage"))
+        val addonCacheDir = File(downloadCacheDir, pkg.key).also { it.mkdirs() }
         return MorneyeRuntime(
             addonKey    = pkg.key,
             jsCode      = jsCode,
             packageDir  = dir,
+            cacheDir    = addonCacheDir,
             storage     = MorneyeAddonStorage(context, pkg.key),
             settingsJson = currentSettings(pkg.key),
             permissions = permissions + setOf("network", "storage"),

@@ -1,60 +1,32 @@
 package com.music.bitchord.data.sources.mornye
 
 import kotlinx.serialization.Serializable
-import kotlinx.serialization.json.Json
-import kotlinx.serialization.json.JsonElement
-import kotlinx.serialization.json.JsonNull
-import kotlinx.serialization.json.JsonObject
-import kotlinx.serialization.json.JsonPrimitive
-import kotlinx.serialization.json.jsonArray
-import kotlinx.serialization.json.jsonObject
-import kotlinx.serialization.json.jsonPrimitive
-
-/**
- * Wire and in-memory shapes for Mornye extension packages.
- *
- * A package is a ZIP archive (.sflx / .morneye-ext / .spotiflac-ext) with a
- * `manifest.json` and a JavaScript entry point. The same package format runs
- * on Lokal desktop and phone; this brings it to BitChord on Android.
- *
- * The manifest naming follows the Mornye spec published at
- * mornyeapp/Mornye-Extension so packages from the official registry install
- * without modification.
- */
+import org.json.JSONArray
+import org.json.JSONObject
 
 @Serializable
 data class InstalledMorneyePackage(
-    /** SHA-1 of "spotiflac:<name>" — stable across updates, used as storage namespace. */
     val key: String,
     val name: String,
     val displayName: String,
     val version: String,
     val description: String,
     val enabled: Boolean = true,
-    /** SHA-256 of the installed archive bytes; used to detect re-installs. */
     val digest: String,
     val installedAt: Long,
-    /** Which registry entry this came from, if any. */
     val repositoryId: String? = null,
-    /** Raw manifest JSON for fields we don't deserialise here. */
     val manifestJson: String = "{}",
 )
 
-/** What the package's manifest declares it can do. */
 data class MorneyeCapabilities(
     val searches: Boolean,
     val downloads: Boolean,
     val qualityOptions: List<MorneyeQualityOption>,
-    /** Whether the addon requires a login or verification step before use. */
-    val accessKind: String?,   // "login" | "verification" | null
+    val accessKind: String?,
 )
 
-data class MorneyeQualityOption(
-    val id: String,
-    val label: String,
-)
+data class MorneyeQualityOption(val id: String, val label: String)
 
-/** One search result row as the addon's JS returned it. */
 data class MorneyeTrack(
     val id: String,
     val title: String,
@@ -67,13 +39,6 @@ data class MorneyeTrack(
     val isAtmos: Boolean,
 )
 
-/**
- * The resolved stream after calling the addon's download() method.
- *
- * Simple addons return a [directUrl] the player opens immediately.
- * Complex addons (DASH, segment-based) indicate [isSegmented] and BitChord
- * will fall through to the next source.
- */
 data class MorneyeStream(
     val directUrl: String?,
     val headers: Map<String, String>,
@@ -83,7 +48,6 @@ data class MorneyeStream(
     val isSegmented: Boolean,
 )
 
-/** A repository entry in the Mornye registry. */
 data class MorneyeRegistryEntry(
     val id: String,
     val name: String,
@@ -97,124 +61,133 @@ data class MorneyeRegistryEntry(
     val category: String,
 )
 
-/** Codec / file-type tokens this integration recognises as lossless. */
+/** Download result from an addon's download() function. */
+data class MorneyeDownloadResult(
+    val success: Boolean,
+    val filePath: String?,
+    val format: String?,
+    val errorMessage: String?,
+)
+
 private val LOSSLESS_TOKENS = setOf(
     "flac", "alac", "wav", "aiff", "aif", "pcm",
     "lossless", "hi-res", "hires", "hi_res",
-    "flac-24", "flac-16", "96khz", "192khz",
+    "flac-24", "flac-16", "96khz", "192khz", "24-bit", "16-bit flac",
 )
+private val ATMOS_TOKENS = setOf("atmos", "dolby", "eac3", "ec-3", "ec3", "joc")
 
-private val ATMOS_TOKENS = setOf(
-    "atmos", "dolby", "eac3", "ec-3", "ec3",
-)
-
-// ── JSON parsing helpers ──────────────────────────────────────────────────
-
-internal val packageJson = Json {
-    isLenient = true
-    ignoreUnknownKeys = true
-    explicitNulls = false
-    coerceInputValues = true
-}
-
-internal fun JsonElement?.stringOrNull(): String? =
-    (this as? JsonPrimitive)?.takeIf { it.isString || it.content.isNotBlank() }?.content?.ifBlank { null }
-
-internal fun JsonElement?.intOrNull(): Int? =
-    (this as? JsonPrimitive)?.content?.toIntOrNull()
-
-internal fun JsonElement?.boolOrFalse(): Boolean =
-    (this as? JsonPrimitive)?.content?.lowercase() in setOf("true", "1", "yes")
-
-/** Parse a track map from addon JS output. */
+/**
+ * Parse a track map from addon JS output into a [MorneyeTrack].
+ *
+ * Handles field names from all major Mornye addons:
+ * - JioSaavn:  name, artists (string), album_name, duration_ms, cover_url
+ * - Deezer:    name, artists (string), album_name, duration_ms, cover_url
+ * - TIDAL:     name, artists (string/array), album_name, duration_ms, cover_url / artwork
+ * - Generic:   title, artist, album, thumbnail, artworkUrl, artwork
+ */
 internal fun parseMorneyeTrack(map: Map<*, *>): MorneyeTrack? {
     val id = map["id"]?.toString()?.trim() ?: return null
     val title = (map["name"] ?: map["title"])?.toString()?.trim() ?: return null
     if (id.isEmpty() || title.isEmpty()) return null
 
+    // artists: may be a string "Artist A, Artist B" or a list/array
     val artist = when (val a = map["artists"] ?: map["artist"]) {
+        is String -> a.trim()
         is List<*> -> a.filterIsInstance<Map<*, *>>()
             .mapNotNull { it["name"]?.toString() }
             .joinToString(", ")
             .ifBlank { a.firstOrNull()?.toString() ?: "" }
+        is JSONArray -> (0 until a.length())
+            .mapNotNull { i ->
+                val item = a.opt(i)
+                when (item) {
+                    is JSONObject -> item.optString("name")
+                    is String    -> item
+                    else         -> item?.toString()
+                }
+            }.joinToString(", ")
         else -> a?.toString() ?: ""
     }
 
+    // album: addon may use album_name, album, or nothing
+    val album = (map["album_name"] ?: map["album"])?.toString()?.trim() ?: ""
+
     val durationMs = when (val d = map["duration_ms"] ?: map["durationMs"] ?: map["duration"]) {
-        is Number -> d.toInt().let { if (it > 10_000) it else it * 1000 }
+        is Number -> d.toInt().let { if (it in 1..7200) it * 1000 else it }
         is String -> d.toIntOrNull()
-        else -> null
+        else      -> null
     }
 
-    val qualityLabel = (map["quality"] ?: map["audioQuality"] ?: map["fileType"])?.toString()
-    val losslessHint = qualityLabel?.lowercase()?.let { q -> LOSSLESS_TOKENS.any { it in q } } == true
-    val atmosHint = qualityLabel?.lowercase()?.let { q -> ATMOS_TOKENS.any { it in q } } == true
+    // artwork: cover_url (Deezer/JioSaavn), artworkUrl, artwork, thumbnail
+    val artworkUrl = (map["cover_url"] ?: map["artworkUrl"] ?: map["artwork"]
+        ?: map["thumbnail"] ?: map["thumbnail_url"] ?: map["image"])?.toString()
+
+    val qualityLabel = (map["audio_quality"] ?: map["quality"] ?: map["audioQuality"]
+        ?: map["fileType"])?.toString()
+    val lossless = qualityLabel?.lowercase()?.let { q -> LOSSLESS_TOKENS.any { it in q } } == true
+    val atmos    = qualityLabel?.lowercase()?.let { q -> ATMOS_TOKENS.any { it in q } } == true
 
     return MorneyeTrack(
-        id = id,
-        title = title,
-        artist = artist.trim(),
-        album = map["album"]?.toString()?.trim() ?: "",
-        durationMs = durationMs,
-        artworkUrl = (map["artwork"] ?: map["artworkUrl"] ?: map["thumbnail"])?.toString(),
+        id           = id,
+        title        = title,
+        artist       = artist.trim(),
+        album        = album,
+        durationMs   = durationMs,
+        artworkUrl   = artworkUrl,
         qualityLabel = qualityLabel,
-        isLossless = losslessHint,
-        isAtmos = atmosHint,
+        isLossless   = lossless,
+        isAtmos      = atmos,
     )
 }
 
-/** Parse a download result map from addon JS output. */
+/** Parse the return value from an addon's stream() / getDownloadUrl() call. */
 internal fun parseMorneyeStream(result: Any?): MorneyeStream? {
     if (result !is Map<*, *>) return null
-
     val url = (result["url"] ?: result["streamUrl"])?.toString()?.trim()
     val hasSegments = result["segments"] is List<*> || result["segment_urls"] is List<*>
-
     @Suppress("UNCHECKED_CAST")
-    val rawHeaders = result["headers"] as? Map<String, String>
-        ?: (result["headers"] as? Map<*, *>)?.mapNotNull { (k, v) ->
-            if (k is String && v != null) k to v.toString() else null
-        }?.toMap()
-        ?: emptyMap()
-
-    val fileType = (result["fileType"] ?: result["file_type"] ?: result["format"])?.toString()
+    val rawHeaders = (result["headers"] as? Map<*, *>)
+        ?.mapNotNull { (k, v) -> if (k is String && v != null) k to v.toString() else null }
+        ?.toMap() ?: emptyMap()
+    val fileType     = (result["fileType"] ?: result["file_type"] ?: result["format"])?.toString()
     val qualityLabel = (result["quality"] ?: result["audioQuality"] ?: fileType)?.toString()
-    val lossless = qualityLabel?.lowercase()?.let { q -> LOSSLESS_TOKENS.any { it in q } } == true
-    val atmos = qualityLabel?.lowercase()?.let { q -> ATMOS_TOKENS.any { it in q } } == true
-
-    // If there is no direct URL and there are no segments we have nothing.
+    val lossless     = qualityLabel?.lowercase()?.let { q -> LOSSLESS_TOKENS.any { it in q } } == true
+    val atmos        = qualityLabel?.lowercase()?.let { q -> ATMOS_TOKENS.any { it in q } } == true
     if (url.isNullOrBlank() && !hasSegments) return null
-
     return MorneyeStream(
-        directUrl = url?.ifBlank { null },
-        headers = rawHeaders,
-        fileType = fileType,
+        directUrl  = url?.ifBlank { null },
+        headers    = rawHeaders,
+        fileType   = fileType,
         isLossless = lossless,
-        isAtmos = atmos,
+        isAtmos    = atmos,
         isSegmented = hasSegments && url.isNullOrBlank(),
     )
 }
 
-/** Capabilities extracted from the manifest JSON map. */
+/** Parse the return value of an addon's download() call. */
+internal fun parseMorneyeDownloadResult(result: Any?): MorneyeDownloadResult {
+    if (result !is JSONObject) return MorneyeDownloadResult(false, null, null, "No result")
+    val success = result.optBoolean("success", false)
+    val filePath = result.optString("file_path", "").ifBlank { null }
+        ?: result.optString("path", "").ifBlank { null }
+    val format   = (result.optString("format", "").ifBlank { null }
+        ?: result.optString("actual_extension", "").ifBlank { null })
+    val error    = result.optString("error_message", "").ifBlank { null }
+        ?: result.optString("error", "").ifBlank { null }
+    return MorneyeDownloadResult(success, filePath, format, error)
+}
+
 internal fun capabilitiesOf(manifest: Map<String, Any?>): MorneyeCapabilities {
     @Suppress("UNCHECKED_CAST")
     val type = manifest["type"] as? List<*> ?: emptyList<Any>()
     val searches = type.any { it.toString() in setOf("download_provider", "metadata_provider") }
-
     @Suppress("UNCHECKED_CAST")
     val qualityRaw = manifest["qualityOptions"] as? List<*> ?: emptyList<Any>()
     val qualities = qualityRaw.filterIsInstance<Map<*, *>>().mapNotNull { q ->
-        val id = q["id"]?.toString() ?: return@mapNotNull null
+        val id    = q["id"]?.toString() ?: return@mapNotNull null
         val label = q["label"]?.toString() ?: id
         MorneyeQualityOption(id, label)
     }
-
     val access = (manifest["access"] as? Map<*, *>)?.get("kind")?.toString()
-
-    return MorneyeCapabilities(
-        searches = searches,
-        downloads = searches, // download_providers also search
-        qualityOptions = qualities,
-        accessKind = access,
-    )
+    return MorneyeCapabilities(searches, searches, qualities, access)
 }

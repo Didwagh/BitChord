@@ -5,33 +5,34 @@ import com.music.bitchord.data.model.Song
 import com.music.bitchord.data.sources.mornye.MorneyeAddonException
 import com.music.bitchord.data.sources.mornye.MorneyePackageManager
 import com.music.bitchord.data.sources.mornye.MorneyeRuntime
-import com.music.bitchord.data.sources.mornye.MorneyeStream
-import com.music.bitchord.data.sources.mornye.parseMorneyeStream
+import com.music.bitchord.data.sources.mornye.parseMorneyeDownloadResult
 import com.music.bitchord.data.sources.mornye.parseMorneyeTrack
 import com.music.bitchord.playback.StreamContainer
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import org.json.JSONArray
 import org.json.JSONObject
+import java.io.File
 import java.util.Locale
 
 /**
- * A [MusicSource] backed by one installed Mornye addon.
+ * [MusicSource] backed by one installed Mornye JS addon.
  *
- * Mornye addons are JavaScript plugins (.sflx / .morneye-ext packages) that
- * expose `searchTracks(query, limit)` and `download(id, quality)` methods.
- * This source bridges those methods into BitChord's existing source pipeline so
- * the addon's streams flow through AudioCache exactly like any other source —
- * prefetched before the previous song ends and cached on disk in the same
- * ExoPlayer SimpleCache that the Download sheet already exports from.
+ * HOW PLAYBACK WORKS (different from Lokal):
  *
- * That is the key behavioural difference from Lokal's Mornye integration:
- *  - **Lokal** fetches the stream after the first song ends  → audible gap.
- *  - **BitChord** pre-fetches while the current song is playing → gapless,
- *    and the bytes land in the standard cache the Download sheet can export.
+ * Lokal calls download() with no path → gets back raw bytes → plays from memory.
+ * That means audio isn't fetched until after the previous track ends → audible gap.
  *
- * One [MorneyeSource] instance per installed addon, held by [SourceRegistry].
- * [configId] is the SourceConfig id; the addon's storage key lives in
- * [SourceConfig.baseUrl].
+ * BitChord instead:
+ *  1. search() returns Song objects with composite videoIds.
+ *  2. stream() is called on the NEXT song while the current one is still playing
+ *     (BitChord's existing AudioCache prefetch drives this).
+ *  3. stream() calls download(rawId, quality, cacheFilePath) → addon fetches +
+ *     optionally decrypts the file into cacheFilePath.
+ *  4. Returns SourceStream(url = "file:///…") → ExoPlayer reads the local file
+ *     with zero network latency → gapless.
+ *  5. Files land in <cacheDir>/mornye/<addonKey>/ — the same directory
+ *     BitChord's Downloads sheet can already browse and export.
  */
 class MorneyeSource(
     override val config: SourceConfig,
@@ -41,7 +42,6 @@ class MorneyeSource(
     override val kind: SourceKind    get() = SourceKind.MORNYE
     override val displayName: String get() = config.displayName
 
-    /** The Mornye addon storage key (stashed in baseUrl by [SourceRegistry.syncMorneyePackages]). */
     val addonKey: String get() = config.baseUrl
 
     private fun runtime(): MorneyeRuntime? = MorneyePackageManager.runtime(addonKey)
@@ -51,26 +51,18 @@ class MorneyeSource(
     override suspend fun health(): SourceHealth = withContext(Dispatchers.IO) {
         val pkg = MorneyePackageManager.packages.value.firstOrNull { it.key == addonKey }
             ?: return@withContext SourceHealth.Rejected("Addon not installed")
-
         if (!pkg.enabled)
             return@withContext SourceHealth.Rejected("Addon is disabled")
-
         val caps = MorneyePackageManager.capabilities(addonKey)
             ?: return@withContext SourceHealth.Rejected("Cannot read addon capabilities")
-
         if (!caps.searches)
-            return@withContext SourceHealth.Rejected(
-                "Addon type not supported (needs download_provider)"
-            )
-
+            return@withContext SourceHealth.Rejected("Addon type not supported (needs download_provider)")
         val rt = runCatching { runtime() }.getOrNull()
             ?: return@withContext SourceHealth.Unreachable("Addon could not start")
-
-        return@withContext if (rt.methods.isNotEmpty()) {
+        return@withContext if (rt.methods.isNotEmpty())
             SourceHealth.Ok("v${pkg.version} · ${rt.methods.size} methods")
-        } else {
+        else
             SourceHealth.Unreachable("Addon loaded but exported no methods")
-        }
     }
 
     // ── Search ────────────────────────────────────────────────────────────
@@ -84,7 +76,8 @@ class MorneyeSource(
         if (query.isBlank()) return@withContext emptyList()
         val rt = runtime() ?: return@withContext emptyList()
 
-        val results = runCatching {
+        // Try searchTracks first (most addons), fall back to customSearch
+        val raw = runCatching {
             when {
                 "searchTracks" in rt.methods ->
                     rt.invoke("searchTracks", listOf(query.trim(), limit))
@@ -92,29 +85,28 @@ class MorneyeSource(
                     rt.invoke("customSearch",
                         listOf(query.trim(), mapOf("limit" to limit, "filter" to "tracks")))
                 else -> {
-                    TrackLog.d(TAG, "[$addonKey] no search method available")
-                    return@withContext emptyList()
+                    TrackLog.d(TAG, "[$addonKey] no search method"); null
                 }
             }
-        }.onFailure { TrackLog.w(TAG, "[$addonKey] search failed: ${it.message}") }
+        }.onFailure { TrackLog.w(TAG, "[$addonKey] search error: ${it.message}") }
             .getOrNull() ?: return@withContext emptyList()
 
-        val tracks: List<Any?> = when (results) {
-            is List<*>              -> results
-            is org.json.JSONArray   ->
-                (0 until results.length()).map { results.opt(it) }
-            is JSONObject           -> {
-                val arr = results.optJSONArray("tracks") ?: results.optJSONArray("results")
+        val items: List<Any?> = when (raw) {
+            is List<*>      -> raw
+            is JSONArray    -> (0 until raw.length()).map { raw.opt(it) }
+            is JSONObject   -> {
+                val arr = raw.optJSONArray("tracks") ?: raw.optJSONArray("results")
+                    ?: raw.optJSONArray("items")
                 if (arr != null) (0 until arr.length()).map { arr.opt(it) } else emptyList()
             }
             else -> emptyList()
         }
 
-        tracks.mapNotNull { raw ->
+        items.mapNotNull { item ->
             @Suppress("UNCHECKED_CAST")
-            val map: Map<*, *> = when (raw) {
-                is JSONObject -> raw.toKotlinMap()
-                is Map<*, *>  -> raw
+            val map: Map<*, *> = when (item) {
+                is JSONObject -> item.toKotlinMap()
+                is Map<*, *>  -> item
                 else          -> return@mapNotNull null
             }
             val track = parseMorneyeTrack(map) ?: return@mapNotNull null
@@ -143,7 +135,11 @@ class MorneyeSource(
         withContext(Dispatchers.IO) {
             val rt = runtime() ?: return@withContext null
 
-            // Optionally initialise / refresh session.
+            // Strip the composite key to get the addon's own track ID.
+            // Song.videoId = "src:<configId>::<addonTrackId>"
+            val rawTrackId = SourceTrackKeys.parse(trackId)?.second ?: trackId
+
+            // Optional initialize call to refresh session
             runCatching {
                 if ("initialize" in rt.methods) {
                     val settings = runCatching {
@@ -153,65 +149,72 @@ class MorneyeSource(
                 }
             }.onFailure { TrackLog.d(TAG, "[$addonKey] initialize: ${it.message}") }
 
-            // The trackId we store in Song.videoId is the full composite key
-            // "src:<configId>::<addonTrackId>". Strip the prefix back to the
-            // raw addon-side ID before passing it to the addon's download().
-            val rawTrackId = SourceTrackKeys.parse(trackId)?.second ?: trackId
-
             val qualityId = resolveQuality(request)
-            val downloadArgs = buildList {
-                add(rawTrackId)
-                add(qualityId)
-                add(mapOf("forPlayback" to true))
-            }
 
-            val result = runCatching {
-                rt.invoke("download", downloadArgs)
+            // Build the output file path in the addon's own cache dir.
+            // The addon may rename the extension (e.g. .flac → .m4a for JioSaavn),
+            // so we use .flac as a default and trust file_path in the result.
+            val addonCacheDir = File(MorneyePackageManager.downloadCacheDir, addonKey)
+                .also { it.mkdirs() }
+            val outputPath = File(addonCacheDir, "${sanitise(rawTrackId)}.flac").absolutePath
+
+            TrackLog.d(TAG, "[$addonKey] download $rawTrackId quality=$qualityId → $outputPath")
+
+            val downloadResult = runCatching {
+                rt.invoke("download",
+                    listOf(rawTrackId, qualityId, outputPath, null,
+                        mapOf("forPlayback" to true)))
             }.onFailure {
-                if (it is MorneyeAddonException) {
-                    TrackLog.d(TAG, "[$addonKey] addon said: ${it.message}")
-                } else {
-                    TrackLog.w(TAG, "[$addonKey] download failed: ${it.message}")
-                }
+                if (it is MorneyeAddonException) TrackLog.d(TAG, "[$addonKey] addon: ${it.message}")
+                else TrackLog.w(TAG, "[$addonKey] download failed: ${it.message}")
             }.getOrNull() ?: return@withContext null
 
-            @Suppress("UNCHECKED_CAST")
-            val streamMap: Map<*, *> = when (result) {
-                is JSONObject -> result.toKotlinMap()
-                is Map<*, *>  -> result
-                else          -> {
-                    TrackLog.w(TAG, "[$addonKey] unexpected result type: ${result::class.simpleName}")
-                    return@withContext null
-                }
-            }
+            val parsed = parseMorneyeDownloadResult(downloadResult as? JSONObject
+                ?: run {
+                    // If invoke returned a Map, re-encode it
+                    @Suppress("UNCHECKED_CAST")
+                    val map = downloadResult as? Map<*, *>
+                    if (map != null) JSONObject(map.mapKeys { it.key.toString() }) else null
+                } ?: return@withContext null)
 
-            val stream = parseMorneyeStream(streamMap) ?: run {
-                TrackLog.d(TAG, "[$addonKey] no stream from download()")
+            if (!parsed.success) {
+                TrackLog.d(TAG, "[$addonKey] download() returned success=false: ${parsed.errorMessage}")
                 return@withContext null
             }
 
-            if (stream.isSegmented) {
-                // Segment-based downloads (DASH / Tidal segments) need a full
-                // offline download pass. Skip and let the next source serve.
-                TrackLog.d(TAG, "[$addonKey] segment result for $trackId — skipping to next source")
+            val filePath = parsed.filePath
+            if (filePath.isNullOrBlank()) {
+                TrackLog.w(TAG, "[$addonKey] download() success but no file_path")
                 return@withContext null
             }
 
-            val url = stream.directUrl ?: return@withContext null
-
-            if (ModuleSource.malformed(url)) {
-                TrackLog.w(TAG, "[$addonKey] malformed URL for $trackId")
+            if (!File(filePath).exists()) {
+                TrackLog.w(TAG, "[$addonKey] file_path does not exist: $filePath")
                 return@withContext null
             }
 
-            // Tell ExoPlayer the container type so it doesn't have to sniff.
-            detectManifestType(url, stream.fileType)
-                ?.let { StreamContainer.declare(url, it) }
+            // Determine the codec from the downloaded file format
+            val codec = when (parsed.format?.lowercase()) {
+                "flac"       -> "flac"
+                "alac", "m4a" -> "alac"
+                "mp3"        -> "mp3"
+                "aac"        -> "aac"
+                else         -> guessCodecFromPath(filePath)
+            }
+            val isLossless = codec in setOf("flac", "alac", "wav")
+            val isAtmos    = codec in setOf("eac3", "eac3-joc")
 
+            val format = StreamFormat(
+                codec        = codec,
+                kbps         = null,
+                kbpsInferred = false,
+            )
+
+            TrackLog.d(TAG, "[$addonKey] ready: file=$filePath codec=$codec")
             SourceStream(
-                url         = url,
-                format      = buildFormat(stream, request),
-                headers     = stream.headers,
+                url         = "file://$filePath",
+                format      = format,
+                headers     = emptyMap(),
                 durationSec = null,
             )
         }
@@ -240,39 +243,26 @@ class MorneyeSource(
         }?.id ?: opts.lastOrNull()?.id
     }
 
-    private fun buildFormat(stream: MorneyeStream, request: StreamRequest): StreamFormat {
-        val codec = when {
-            stream.isAtmos  -> "eac3-joc"
-            stream.isLossless -> "flac"
-            stream.fileType?.contains("flac", ignoreCase = true) == true -> "flac"
-            stream.fileType?.contains("alac", ignoreCase = true) == true -> "alac"
-            stream.fileType?.contains("mp3",  ignoreCase = true) == true -> "mp3"
-            stream.fileType?.contains("aac",  ignoreCase = true) == true -> "aac"
-            stream.fileType?.contains("m4a",  ignoreCase = true) == true -> "m4a"
-            else -> null
-        }
-        val tierKbps = (request as? StreamRequest.Capped)?.maxKbps
-        return StreamFormat(codec = codec, kbps = tierKbps, kbpsInferred = tierKbps != null)
+    private fun guessCodecFromPath(path: String): String? = when {
+        path.endsWith(".flac", ignoreCase = true) -> "flac"
+        path.endsWith(".m4a",  ignoreCase = true) -> "aac"
+        path.endsWith(".mp3",  ignoreCase = true) -> "mp3"
+        path.endsWith(".alac", ignoreCase = true) -> "alac"
+        path.endsWith(".ogg",  ignoreCase = true) -> "vorbis"
+        path.endsWith(".opus", ignoreCase = true) -> "opus"
+        else -> null
     }
 
-    private fun detectManifestType(url: String, fileType: String?): String? {
-        val ft = fileType?.lowercase(Locale.ROOT) ?: ""
-        return when {
-            "hls"  in ft || "m3u" in ft                        -> "hls"
-            "dash" in ft || "mpd" in ft                        -> "dash"
-            url.contains(".m3u8", ignoreCase = true)           -> "hls"
-            url.contains(".mpd",  ignoreCase = true)           -> "dash"
-            else                                               -> null
-        }
-    }
+    private fun sanitise(id: String) =
+        id.replace(Regex("[^a-zA-Z0-9_\\-]"), "_").take(80)
 
     companion object {
         private const val TAG = "BitChord/Mornye"
     }
 
     private fun JSONObject.toKotlinMap(): Map<String, Any?> {
-        val map = mutableMapOf<String, Any?>()
-        for (key in keys()) map[key] = opt(key)
-        return map
+        val m = mutableMapOf<String, Any?>()
+        for (k in keys()) m[k] = opt(k)
+        return m
     }
 }
