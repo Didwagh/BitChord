@@ -671,7 +671,7 @@ private fun AddSourceRow(onClick: () -> Unit) {
 @Composable
 private fun MorneyeSourceRow(onClick: () -> Unit) {
     val installedCount by com.music.bitchord.data.sources.mornye.MorneyePackageManager
-        .packages.collectAsStateWithLifecycle(initialValue = emptyList())
+        .packages.collectAsStateWithLifecycle()
     Row(
         modifier = Modifier
             .fillMaxWidth()

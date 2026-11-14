@@ -1,6 +1,5 @@
 package com.music.bitchord.ui.screens
 
-import android.content.Context
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -41,12 +40,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
-import com.music.bitchord.R
 import com.music.bitchord.data.sources.mornye.InstalledMorneyePackage
 import com.music.bitchord.data.sources.mornye.MorneyeInstallException
 import com.music.bitchord.data.sources.mornye.MorneyePackageManager
