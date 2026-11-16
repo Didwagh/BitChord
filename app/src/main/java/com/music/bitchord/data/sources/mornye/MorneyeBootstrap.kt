@@ -103,6 +103,7 @@ internal const val MORNYE_BOOTSTRAP = """
   globalThis.fetch=function(u,o){o=o||{};return request(u,o.method,o.body,o.headers);};
   var _file=function(path){return call('file',[String(path)]);};
   _file.download=function(url,path,opts){return call('file.download',[String(url),String(path),opts||{}]);};
+  _file.downloadSegments=function(urls,path,opts){return call('file.downloadSegments',[urls||[],String(path),opts||{}]);};
   _file.delete=function(path){return call('file.delete',[String(path)]);};
   _file.exists=function(path){return call('file.exists',[String(path)]);};
   _file.read=function(path){return call('file.read',[String(path)]);};
@@ -190,6 +191,30 @@ internal const val MORNYE_BOOTSTRAP = """
       base64Decode:function(value){return utf8Text(base64Bytes(String(value==null?'':value)));},
     };
   })();
+  // The desktop host's `gobackend` object. Addons probe it with
+  // `if (!gobackend || typeof gobackend.getAudioQuality !== 'function')`, and
+  // an undeclared identifier throws on that first `!gobackend` even though the
+  // `typeof` guard looks safe. Defining the object turns those probes into
+  // "not available here" instead of aborting a download with a ReferenceError.
+  globalThis.gobackend={
+    getLocalTime:function(){
+      var d=new Date();
+      return {
+        hour:d.getHours(),minute:d.getMinutes(),second:d.getSeconds(),
+        year:d.getFullYear(),month:d.getMonth()+1,day:d.getDate(),
+        weekday:d.getDay(),timestamp:d.getTime(),
+      };
+    },
+    sanitizeFilename:function(name){
+      return String(name==null?'':name).replace(/[\\/:*?"<>|]/g,'_').trim();
+    },
+    // No local audio-analysis index. Returning "unavailable" is honest: the
+    // addon skips its duration/quality check rather than reading a fabricated
+    // duration, and BitChord measures the codec from the bytes itself.
+    getAudioQuality:function(){return null;},
+    getLyricsLRC:function(){return {error:'lyrics lookup is not available'};},
+    checkISRCExists:function(){return false;},
+  };
   globalThis.log={
     debug:function(){try{call('log',Array.prototype.slice.call(arguments));}catch(e){}},
     info:function(){try{call('log',Array.prototype.slice.call(arguments));}catch(e){}},

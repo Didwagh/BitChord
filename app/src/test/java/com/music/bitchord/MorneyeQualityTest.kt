@@ -99,6 +99,22 @@ class MorneyeQualityTest {
         )
         assertEquals(listOf(true, false, false), caps.qualityOptions.map { it.isLossless })
         assertEquals(320, caps.qualityOptions[1].kbps)
+        // Searchable and streamable: both flags are true only because the
+        // manifest names `download_provider`.
+        assertTrue(caps.searches)
+        assertTrue(caps.downloads)
+    }
+
+    @Test
+    fun `a metadata-only addon is not reported as able to download`() {
+        val caps = capabilitiesOf(
+            mapOf(
+                "type" to listOf("metadata_provider", "lyrics_provider"),
+                "qualityOptions" to emptyList<Map<String, Any?>>(),
+            ),
+        )
+        assertTrue(caps.searches)
+        assertFalse(caps.downloads)
     }
 
     @Test

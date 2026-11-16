@@ -70,6 +70,7 @@ internal class MorneyeHostBridge(
         "credentials.remove"            -> { storage.removeCredential(args.optString(0)); JSONObject().apply { put("success", true) } }
         "file"                          -> handlePackageFileRead(args)
         "file.download"                 -> handleFileDownload(args)
+        "file.downloadSegments"         -> handleFileDownloadSegments(args)
         "file.delete"                   -> handleFileDelete(args)
         "file.exists"                   -> handleFileExists(args)
         "file.read"                     -> handleFileRead(args)
@@ -192,6 +193,70 @@ internal class MorneyeHostBridge(
             }
         }
         return JSONObject().apply { put("success", true); put("path", file.absolutePath) }
+    }
+
+    /**
+     * Concatenates an init segment and its media segments into one file.
+     *
+     * Tidal and Qobuz hand back DASH/fMP4 as a list of byte ranges rather than
+     * a single URL. The host writes them in the order given, which is the order
+     * the container requires. Segments are fetched one at a time: the addon's
+     * `maxParallel` is a hint, and a predictable write order matters more than
+     * a few seconds of overlap for a file that plays straight afterwards.
+     *
+     * A partially written file is removed on failure. Leaving it in place would
+     * make [MorneyeSource]'s "reuse what read-ahead already fetched" check pick
+     * up a truncated stream on the next attempt.
+     */
+    private fun handleFileDownloadSegments(args: JSONArray): JSONObject {
+        val urls = when (val raw = args.opt(0)) {
+            is JSONArray -> (0 until raw.length()).mapNotNull { raw.optString(it).takeIf { s -> s.isNotBlank() } }
+            is List<*>   -> raw.mapNotNull { it?.toString()?.takeIf { s -> s.isNotBlank() } }
+            else         -> emptyList()
+        }
+        val path = args.optString(1).trim()
+        val opts = args.optJSONObject(2) ?: JSONObject()
+        if (urls.isEmpty()) return JSONObject().apply {
+            put("success", false)
+            put("error", "No segment URLs")
+            put("error_type", "invalid_argument")
+        }
+
+        val file = resolveWritablePath(path)
+        file.parentFile?.mkdirs()
+        val hdrs = opts.optJSONObject("headers") ?: JSONObject()
+        TrackLog.d(TAG, "file.downloadSegments ${urls.size} segment(s) → $path")
+
+        try {
+            file.outputStream().buffered(65536).use { out ->
+                urls.forEachIndexed { index, url ->
+                    val builder = Request.Builder().url(url)
+                    for (k in hdrs.keys()) runCatching { builder.header(k, hdrs.getString(k)) }
+                    if (!hdrs.has("User-Agent")) builder.header("User-Agent", "Mozilla/5.0")
+                    httpClient.newCall(builder.build()).execute().use { resp ->
+                        if (!resp.isSuccessful) {
+                            throw IllegalStateException("HTTP ${resp.code} for segment ${index + 1} of ${urls.size}")
+                        }
+                        resp.body?.byteStream()?.use { input -> input.copyTo(out, 65536) }
+                            ?: throw IllegalStateException("Empty segment ${index + 1} of ${urls.size}")
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            runCatching { file.delete() }
+            TrackLog.w(TAG, "file.downloadSegments failed: ${e.message}")
+            return JSONObject().apply {
+                put("success", false)
+                put("error", e.message ?: "Segment download failed")
+                put("error_type", "http_error")
+            }
+        }
+
+        return JSONObject().apply {
+            put("success", true)
+            put("path", file.absolutePath)
+            put("size", file.length())
+        }
     }
 
     private fun handleFileDelete(args: JSONArray): JSONObject {

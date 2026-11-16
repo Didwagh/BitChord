@@ -186,6 +186,20 @@ class MorneyeSource(
             // Optional initialize call to refresh session and apply settings.
             initializeIfSupported(rt)
 
+            // A metadata-only addon (Apple Music, Spotify) searches but has no
+            // download() to produce a file. Asking anyway returned `no_method`
+            // with no explanation, once per prefetch, and made it look as if
+            // the source had failed rather than not being a stream source.
+            val methods = runCatching { rt.exportedMethods() }.getOrDefault(emptyList())
+            if ("download" !in methods) {
+                TrackLog.d(
+                    TAG,
+                    "[$addonKey] $rawTrackId is metadata-only (no download method); " +
+                        "playback will fall through to a source that can stream it",
+                )
+                return@withContext null
+            }
+
             val quality = resolveQuality(request)
             // The tier is part of the file name. A prefetch made at 320kbps and
             // a later play that asks for lossless must not reuse that file, and

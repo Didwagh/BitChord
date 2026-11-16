@@ -265,7 +265,12 @@ internal fun capabilitiesOf(manifest: Map<String, Any?>): MorneyeCapabilities {
         )
     }
     val access = (manifest["access"] as? Map<*, *>)?.get("kind")?.toString()
-    return MorneyeCapabilities(searches, searches, qualities, access)
+    // A metadata-only addon (Apple Music, Spotify) can search but has no
+    // download() to hand playback a file. Reporting searches as downloads made
+    // every search row look playable and sent prefetch into a `download` call
+    // that could only answer "no_method".
+    val downloads = type.any { it.toString() == "download_provider" }
+    return MorneyeCapabilities(searches, downloads, qualities, access)
 }
 
 // ── Quality metadata ────────────────────────────────────────────────────────
