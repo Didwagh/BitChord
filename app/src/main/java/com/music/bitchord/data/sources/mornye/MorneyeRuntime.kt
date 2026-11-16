@@ -56,6 +56,22 @@ internal class MorneyeRuntime(
     // ── Public API ──────────────────────────────────────────────────────
 
     /**
+     * The methods the addon exported, starting its engine first if needed.
+     *
+     * [methods] is only filled while building the engine, which used to happen
+     * lazily on the first [invoke]. Every caller that asked what an addon could
+     * do *before* calling it — search, health — therefore saw an empty list and
+     * concluded the addon exported nothing. Building here makes the answer the
+     * same before and after the first call.
+     */
+    suspend fun exportedMethods(): List<String> = withContext(Dispatchers.IO) {
+        mutex.withLock {
+            ensureEngine()
+            methods.toList()
+        }
+    }
+
+    /**
      * Calls [method] on the addon JS and returns the deserialised result, or
      * null when the addon did not expose that method.
      */

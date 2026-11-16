@@ -70,9 +70,26 @@ internal const val MORNYE_BOOTSTRAP = """
     remove:function(k){return call('credentials.remove',[String(k)]).success;},
     has:function(k){return call('credentials.get',[String(k)]).found;},
   };
+  function adaptResponse(r){
+    if(!r||typeof r!=='object')return r;
+    if(typeof r.text==='function')return r;
+    var status=typeof r.status==='number'?r.status:(typeof r.statusCode==='number'?r.statusCode:0);
+    var body=r.body==null?'':String(r.body);
+    r.status=status;
+    r.statusCode=status;
+    if(typeof r.ok!=='boolean')r.ok=status>=200&&status<300;
+    r.text=function(){return body;};
+    r.json=function(){return parse(body);};
+    r.arrayBuffer=function(){
+      var a=new Uint8Array(body.length);
+      for(var i=0;i<body.length;i++)a[i]=body.charCodeAt(i)&255;
+      return a.buffer;
+    };
+    return r;
+  }
   function request(url,method,body,headers){
     body=body==null?'':typeof body==='object'?goJSON(body):String(body);
-    return call('http.request',[String(url),{method:method||'GET',body:body,headers:headers||{}}]);
+    return adaptResponse(call('http.request',[String(url),{method:method||'GET',body:body,headers:headers||{}}]));
   }
   globalThis.http={
     get:function(u,h){return request(u,'GET',null,h);},
@@ -100,6 +117,79 @@ internal const val MORNYE_BOOTSTRAP = """
     sign:function(d,k,a){return call('crypto.sign',[d,k,a]);},
   };
   try{Object.defineProperty(globalThis,'crypto',{value:_crypto,writable:true,configurable:true});}catch(e){}
+  // Host helpers the addons expect as `utils`. They are not optional: the
+  // bundles read `utils` as a plain global and dereference it before their own
+  // fallbacks (`utils && …`, `utils.randomUserAgent()`), so an undefined name
+  // throws a ReferenceError on the first request.
+  globalThis.utils=(function(){
+    var APP_UA='SpotiFLAC-Mobile/1.0 (Android)';
+    var DESKTOP_UA='Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Mobile Safari/537.36';
+    function utf8Bytes(value){
+      var s=String(value==null?'':value),a=[];
+      for(var i=0;i<s.length;i++){
+        var c=s.charCodeAt(i);
+        if(c<0x80){a.push(c);}
+        else if(c<0x800){a.push(0xC0|(c>>6),0x80|(c&0x3F));}
+        else if(c>=0xD800&&c<=0xDBFF&&i+1<s.length){
+          var d=s.charCodeAt(++i),cp=0x10000+((c-0xD800)<<10)+(d-0xDC00);
+          a.push(0xF0|(cp>>18),0x80|((cp>>12)&0x3F),0x80|((cp>>6)&0x3F),0x80|(cp&0x3F));
+        }
+        else{a.push(0xE0|(c>>12),0x80|((c>>6)&0x3F),0x80|(c&0x3F));}
+      }
+      return new Uint8Array(a);
+    }
+    function utf8Text(bytes){
+      var out='',i=0,n=bytes.length;
+      while(i<n){
+        var c=bytes[i++];
+        if(c<0x80){out+=String.fromCharCode(c);}
+        else if(c<0xE0&&i<n){out+=String.fromCharCode(((c&0x1F)<<6)|(bytes[i++]&0x3F));}
+        else if(c<0xF0&&i+1<n){out+=String.fromCharCode(((c&0x0F)<<12)|((bytes[i++]&0x3F)<<6)|(bytes[i++]&0x3F));}
+        else if(i+2<n){
+          var cp=((c&0x07)<<18)|((bytes[i++]&0x3F)<<12)|((bytes[i++]&0x3F)<<6)|(bytes[i++]&0x3F);
+          cp-=0x10000;out+=String.fromCharCode(0xD800+(cp>>10),0xDC00+(cp&0x3FF));
+        }
+      }
+      return out;
+    }
+    function bytesOf(value){
+      if(value instanceof Uint8Array)return value;
+      if(value instanceof ArrayBuffer)return new Uint8Array(value);
+      if(ArrayBuffer.isView(value))return new Uint8Array(value.buffer,value.byteOffset,value.byteLength);
+      if(Array.isArray(value))return new Uint8Array(value);
+      return utf8Bytes(value);
+    }
+    function hex(bytes){
+      var s='';
+      for(var i=0;i<bytes.length;i++){var h=bytes[i].toString(16);s+=h.length<2?'0'+h:h;}
+      return s;
+    }
+    var B64='ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+    function base64Bytes(text){
+      var s=String(text||'').replace(/[\s=]/g,'').replace(/-/g,'+').replace(/_/g,'/');
+      var out=[],bits=0,acc=0;
+      for(var i=0;i<s.length;i++){
+        var v=B64.indexOf(s.charAt(i));
+        if(v<0)continue;
+        acc=(acc<<6)|v;bits+=6;
+        if(bits>=8){bits-=8;out.push((acc>>bits)&255);}
+      }
+      return new Uint8Array(out);
+    }
+    return {
+      appUserAgent:function(){return APP_UA;},
+      randomUserAgent:function(){return DESKTOP_UA;},
+      appVersion:function(){return '1.0';},
+      sleep:function(ms){return call('utils.sleep',[Number(ms)||0]);},
+      isDownloadCancelled:function(){return false;},
+      isRequestCancelled:function(){return false;},
+      getResolutionRemainingMs:function(){return 120000;},
+      sha256:function(value){return hex(call('crypto.hash',[bytesOf(value),'SHA-256']));},
+      md5:function(value){return hex(call('crypto.hash',[bytesOf(value),'MD5']));},
+      hmacSHA1:function(key,data){return call('crypto.hmac',[bytesOf(key),bytesOf(data),'SHA-1']);},
+      base64Decode:function(value){return utf8Text(base64Bytes(String(value==null?'':value)));},
+    };
+  })();
   globalThis.log={
     debug:function(){try{call('log',Array.prototype.slice.call(arguments));}catch(e){}},
     info:function(){try{call('log',Array.prototype.slice.call(arguments));}catch(e){}},
@@ -112,5 +202,5 @@ internal const val MORNYE_BOOTSTRAP = """
     error:function(){try{call('log',Array.prototype.slice.call(arguments));}catch(e){}},
     info:function(){try{call('log',Array.prototype.slice.call(arguments));}catch(e){}},
   };
-})(bridge,{ settings:{},permissions:{storage:true,network:['*']} });
+})(bridge,(typeof __mornye_config!=='undefined'&&__mornye_config)?__mornye_config:{ settings:{},permissions:{storage:true,network:['*']} });
 """

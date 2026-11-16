@@ -83,6 +83,7 @@ internal class MorneyeHostBridge(
         "crypto.hash"                   -> handleHash(args)
         "crypto.random"                 -> handleRandom(args)
         "crypto.sign"                   -> JSONObject().apply { put("value", "") }
+        "utils.sleep"                   -> handleSleep(args)
         "log"                           -> { TrackLog.d(TAG, "[addon] ${args.optString(0)}"); null }
         else                            -> { TrackLog.d(TAG, "bridge: unhandled $method"); null }
     }
@@ -123,6 +124,16 @@ internal class MorneyeHostBridge(
             return JSONObject().apply {
                 put("ok",     resp.isSuccessful)
                 put("status", resp.code)
+                // Mornye's own host speaks the Go/HTTP shape (`statusCode`),
+                // while a few addons use the fetch shape (`status`, `.json()`).
+                // Both are handed out; the JS bootstrap adds the methods.
+                put("statusCode", resp.code)
+                put("url",    resp.request.url.toString())
+                put("headers", JSONObject().apply {
+                    resp.headers.names().forEach { name ->
+                        put(name, resp.headers.values(name).joinToString(", "))
+                    }
+                })
                 put("body",   bytes.toString(Charsets.UTF_8))
             }
         }
@@ -359,6 +370,20 @@ internal class MorneyeHostBridge(
         val n     = args.optInt(0, 16).coerceIn(1, 1024)
         val bytes = ByteArray(n).also { SecureRandom().nextBytes(it) }
         return JSONObject().apply { put("__bytes", JSONArray(bytes.map { it.toInt() and 0xFF })) }
+    }
+
+    /**
+     * `utils.sleep(ms)` from an addon's retry loop.
+     *
+     * Called through the synchronous bridge, so this blocks the addon's own
+     * dispatcher thread — the same way the reference host does. Capped so a
+     * catalogue asking for an hour-long backoff cannot hold the runtime
+     * forever; the addon sees a normal `true` and retries as usual.
+     */
+    private fun handleSleep(args: JSONArray): Boolean {
+        val ms = args.optDouble(0, 0.0).toLong().coerceIn(0L, 30_000L)
+        if (ms > 0) runCatching { Thread.sleep(ms) }
+        return true
     }
 
     // ── Path helpers ──────────────────────────────────────────────────────

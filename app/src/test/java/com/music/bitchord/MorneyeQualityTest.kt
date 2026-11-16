@@ -2,6 +2,7 @@ package com.music.bitchord
 
 import com.music.bitchord.data.sources.mornye.bitDepthFromLabel
 import com.music.bitchord.data.sources.mornye.bitDepthOf
+import com.music.bitchord.data.sources.mornye.capabilitiesOf
 import com.music.bitchord.data.sources.mornye.isAtmosClaim
 import com.music.bitchord.data.sources.mornye.isLosslessClaim
 import com.music.bitchord.data.sources.mornye.isLosslessCodec
@@ -82,6 +83,22 @@ class MorneyeQualityTest {
         assertEquals(16, bitDepthFromLabel("CD 16 bit"))
         assertNull(bitDepthFromLabel("320 kbps"))
         assertNull(bitDepthFromLabel("44.1 kHz"))
+    }
+
+    @Test
+    fun `a lossless family is read from the manifest kind`() {
+        val caps = capabilitiesOf(
+            mapOf(
+                "type" to listOf("metadata_provider", "download_provider"),
+                "qualityOptions" to listOf(
+                    mapOf("id" to "best", "label" to "FLAC Best Available", "kind" to "lossless"),
+                    mapOf("id" to "opus", "label" to "Opus 320kbps", "kind" to "lossy"),
+                    mapOf("id" to "eac3", "label" to "Dolby Digital Plus", "kind" to "spatial"),
+                ),
+            ),
+        )
+        assertEquals(listOf(true, false, false), caps.qualityOptions.map { it.isLossless })
+        assertEquals(320, caps.qualityOptions[1].kbps)
     }
 
     @Test

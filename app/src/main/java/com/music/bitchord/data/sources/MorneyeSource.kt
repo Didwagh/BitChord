@@ -53,6 +53,18 @@ class MorneyeSource(
 
     val addonKey: String get() = config.baseUrl
 
+    /**
+     * The runtime whose `initialize()` has already run.
+     *
+     * Addons reset their in-memory state in `initialize` (Apple Music clears
+     * its metadata cache, JioSaavn its song cache), so it is a once-per-engine
+     * call, not a per-search one. Comparing identity rather than a Boolean
+     * means a runtime that was torn down on a settings change is initialised
+     * again when it is rebuilt.
+     */
+    @Volatile private var initialisedRuntime: MorneyeRuntime? = null
+    private val initLock = Mutex()
+
     private fun runtime(): MorneyeRuntime? = MorneyePackageManager.runtime(addonKey)
 
     // ── Health ────────────────────────────────────────────────────────────
@@ -68,8 +80,11 @@ class MorneyeSource(
             return@withContext SourceHealth.Rejected("Addon type not supported (needs download_provider)")
         val rt = runCatching { runtime() }.getOrNull()
             ?: return@withContext SourceHealth.Unreachable("Addon could not start")
-        return@withContext if (rt.methods.isNotEmpty())
-            SourceHealth.Ok("v${pkg.version} · ${rt.methods.size} methods")
+        val methods = runCatching { rt.exportedMethods() }
+            .onFailure { TrackLog.w(TAG, "[$addonKey] engine failed: ${it.message}") }
+            .getOrDefault(emptyList())
+        return@withContext if (methods.isNotEmpty())
+            SourceHealth.Ok("v${pkg.version} · ${methods.size} methods")
         else
             SourceHealth.Unreachable("Addon loaded but exported no methods")
     }
@@ -85,16 +100,34 @@ class MorneyeSource(
         if (query.isBlank()) return@withContext emptyList()
         val rt = runtime() ?: return@withContext emptyList()
 
-        // Try searchTracks first (most addons), fall back to customSearch
+        // The addon contract starts with initialize(); it used to be called
+        // only from stream(), and only after the engine had been built by some
+        // other call, so a search could run against an addon that had never
+        // seen its settings.
+        initializeIfSupported(rt)
+
+        // The engine is built lazily, so ask it what it exports before reading
+        // that list. Checking a runtime that has not been started yet used to
+        // report "no search method" for every addon on the first lookup.
+        val methods = runCatching { rt.exportedMethods() }
+            .onFailure { TrackLog.w(TAG, "[$addonKey] engine failed: ${it.message}") }
+            .getOrDefault(emptyList())
+
+        // Try searchTracks first (the module-style addons), fall back to
+        // customSearch (the metadata/download providers, Amazon among them).
         val raw = runCatching {
             when {
-                "searchTracks" in rt.methods ->
+                "searchTracks" in methods ->
                     rt.invoke("searchTracks", listOf(query.trim(), limit))
-                "customSearch" in rt.methods ->
+                "customSearch" in methods ->
                     rt.invoke("customSearch",
-                        listOf(query.trim(), mapOf("limit" to limit, "filter" to "tracks")))
+                        listOf(query.trim(), mapOf("limit" to limit, "filter" to "songs")))
                 else -> {
-                    TrackLog.d(TAG, "[$addonKey] no search method"); null
+                    TrackLog.d(
+                        TAG,
+                        "[$addonKey] no search method (methods=${methods.joinToString()})",
+                    )
+                    null
                 }
             }
         }.onFailure { TrackLog.w(TAG, "[$addonKey] search error: ${it.message}") }
@@ -150,15 +183,8 @@ class MorneyeSource(
             // Song.videoId = "src:<configId>::<addonTrackId>"
             val rawTrackId = SourceTrackKeys.parse(trackId)?.second ?: trackId
 
-            // Optional initialize call to refresh session
-            runCatching {
-                if ("initialize" in rt.methods) {
-                    val settings = runCatching {
-                        JSONObject(MorneyePackageManager.currentSettings(addonKey)).toKotlinMap()
-                    }.getOrDefault(emptyMap<String, Any?>())
-                    rt.invoke("initialize", listOf(settings))
-                }
-            }.onFailure { TrackLog.d(TAG, "[$addonKey] initialize: ${it.message}") }
+            // Optional initialize call to refresh session and apply settings.
+            initializeIfSupported(rt)
 
             val quality = resolveQuality(request)
             // The tier is part of the file name. A prefetch made at 320kbps and
@@ -431,6 +457,37 @@ class MorneyeSource(
     private data class FlacInfo(val sampleRateHz: Int, val bitDepth: Int)
 
     // ── Helpers ─────────────────────────────────────────────────────────────
+
+    /**
+     * Runs the addon's `initialize(settings)` once the engine is up.
+     *
+     * The contract starts here: settings, credentials and session state are
+     * what every later search and download reads. It is skipped for addons
+     * that do not export it, and a failure is logged rather than fatal — an
+     * addon whose initialize is unhappy can still answer a plain search.
+     */
+    private suspend fun initializeIfSupported(rt: MorneyeRuntime) {
+        if (initialisedRuntime === rt) return
+        initLock.withLock {
+            if (initialisedRuntime === rt) return
+            val methods = runCatching { rt.exportedMethods() }
+                .onFailure { TrackLog.w(TAG, "[$addonKey] engine failed: ${it.message}") }
+                .getOrDefault(emptyList())
+            if ("initialize" in methods) {
+                runCatching {
+                    val settings = runCatching {
+                        JSONObject(MorneyePackageManager.currentSettings(addonKey)).toKotlinMap()
+                    }.getOrDefault(emptyMap<String, Any?>())
+                    rt.invoke("initialize", listOf(settings))
+                }.onFailure { TrackLog.d(TAG, "[$addonKey] initialize: ${it.message}") }
+                    .onSuccess { initialisedRuntime = rt }
+            } else {
+                // Nothing to call; remember that so the method scan is not
+                // repeated on every search.
+                initialisedRuntime = rt
+            }
+        }
+    }
 
     private fun guessCodecFromPath(path: String): String? = when {
         path.endsWith(".flac", ignoreCase = true) -> "flac"

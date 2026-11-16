@@ -236,9 +236,15 @@ internal fun capabilitiesOf(manifest: Map<String, Any?>): MorneyeCapabilities {
         val label = q["label"]?.toString() ?: id
         val codec = (q["codec"] ?: q["format"] ?: q["fileType"])?.toString()
             ?.lowercase()?.let(::normaliseCodec)
+        // Mornye manifests state the tier's family as `kind` (`lossless`,
+        // `lossy`, `spatial`) far more often than they state `lossless: true`.
+        // A family is a claim like a label is; the bytes still decide the
+        // format that is reported.
+        val kind = q["kind"]?.toString()?.lowercase()
         val declaredLossless = q["lossless"] as? Boolean
             ?: (q["isLossless"] as? Boolean)
             ?: (q["is_lossless"] as? Boolean)
+            ?: (kind == "lossless")
         val kbps = sequenceOf("kbps", "bitrate", "bit_rate", "bitrate_kbps")
             .mapNotNull { key -> q[key]?.let(::kbpsOf) }
             .firstOrNull() ?: kbpsFromLabel(label)
