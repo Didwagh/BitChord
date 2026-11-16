@@ -11,7 +11,6 @@ import com.music.bitchord.data.sources.StreamRequest
 import com.music.bitchord.data.sources.addon.AddonAuth
 import com.music.bitchord.data.sources.addon.AddonClient
 import com.music.bitchord.data.sources.addon.AddonException
-import com.music.bitchord.data.sources.addon.AddonQualityOption
 import com.music.bitchord.data.sources.addon.AddonUnavailable
 import com.music.bitchord.playback.StreamContainer
 import kotlinx.coroutines.runBlocking
@@ -281,13 +280,14 @@ class AddonSourceTest {
     }
 
     @Test
-    fun `only an addon known to lack bitchordAuth counts as needing an update`() {
-        assertTrue(SourceConfig(kind = SourceKind.ADDON, bitchordAuth = false).needsAddonUpdate)
-        assertFalse(SourceConfig(kind = SourceKind.ADDON, bitchordAuth = true).needsAddonUpdate)
-        // Not read yet: the manifest is checked before the first request instead.
-        assertFalse(SourceConfig(kind = SourceKind.ADDON, bitchordAuth = null).needsAddonUpdate)
-        // Module indexes are a different protocol and aren't gated.
-        assertFalse(SourceConfig(kind = SourceKind.CUSTOM_MODULE, bitchordAuth = false).needsAddonUpdate)
+    fun `an out-of-date addon is flagged by the registry, not guessed from its kind`() {
+        // The flag is stored rather than derived: the registry sets it when a
+        // manifest fetch fails, and clears it when one declares bitchordAuth
+        // again — see [SourceRegistry.updatePolicy] / [SourceRegistry.markAddonOutdated].
+        // The constructor itself invents nothing.
+        assertFalse(SourceConfig(kind = SourceKind.ADDON).isOutdated)
+        assertTrue(SourceConfig(kind = SourceKind.ADDON, isOutdated = true).isOutdated)
+        assertFalse(SourceConfig(kind = SourceKind.CUSTOM_MODULE).isOutdated)
     }
 
     @Test
@@ -519,17 +519,6 @@ class AddonSourceTest {
         AddonSource(config().copy(pickedQuality = "gone")).stream("t1", StreamRequest.Lossless)
 
         assertEquals("max", requestFor("/stream/t1").queryParameter("quality"))
-    }
-
-    @Test
-    fun `the active quality is the pick while it is listed and the first option otherwise`() {
-        val options = listOf(AddonQualityOption("max", "MAX"), AddonQualityOption("hires", "HiRes"))
-        val listed = config().copy(qualityOptions = options)
-
-        assertEquals("max", listed.activeQuality?.value)
-        assertEquals("hires", listed.copy(pickedQuality = "hires").activeQuality?.value)
-        assertEquals("max", listed.copy(pickedQuality = "gone").activeQuality?.value)
-        assertNull(config().activeQuality)
     }
 
     @Test

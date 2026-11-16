@@ -469,6 +469,19 @@ object SourceRegistry {
                     label = detected.manifest.displayName,
                     allowDownloads = detected.manifest.downloadsAllowed,
                     checkValidLossless = detected.manifest.requiresLosslessOutput,
+                    // Stored here as well as from the first request's
+                    // [updatePolicy]: the sources editor has to show an
+                    // addon's quality choices, and flag one whose manifest is
+                    // out of date, before either has been used.
+                    qualityOptions = detected.manifest.qualityOptions,
+                    bitchordAuth = detected.manifest.requiresBitChordAuth,
+                    isOutdated = false,
+                    // A pick the manifest no longer lists would otherwise be
+                    // sent forever; the client would silently fall back, and
+                    // the editor would show a choice that isn't there.
+                    pickedQuality = existing?.pickedQuality?.takeIf { pick ->
+                        pick in detected.manifest.qualityOptions.map { it.value }
+                    },
                 ),
             )
             is DetectedFormat.ModuleIndex -> Result.success(
