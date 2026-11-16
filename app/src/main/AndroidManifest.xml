@@ -239,6 +239,21 @@
                     android:host="party" />
             </intent-filter>
 
+            <!-- Signed-session verification callbacks for Mornye add-ons
+                 (Tidal, Qobuz, Amazon, Deezer). The gateway's browser page
+                 redirects here with a one-time grant after Turnstile. -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data
+                    android:scheme="mornye"
+                    android:host="session-grant" />
+                <data
+                    android:scheme="spotiflac"
+                    android:host="session-grant" />
+            </intent-filter>
+
             <!--
               Share → BitChord, from YT Music's own share sheet or from
               anywhere a link can be sent. The text is whatever the sending app

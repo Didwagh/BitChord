@@ -54,9 +54,16 @@ object MorneyePackageManager {
     private val _packages = MutableStateFlow<List<InstalledMorneyePackage>>(emptyList())
     val packages: StateFlow<List<InstalledMorneyePackage>> = _packages.asStateFlow()
 
+    /** Bumped when a signed session is connected, cleared or refreshed by a callback. */
+    private val _sessionRevision = MutableStateFlow(0L)
+    val sessionRevision: StateFlow<Long> = _sessionRevision.asStateFlow()
+
     /** Active runtimes, keyed by addon key. Created lazily, closed on removal. */
     private val runtimes = mutableMapOf<String, MorneyeRuntime>()
     private val runtimeLock = Any()
+
+    /** Session clients used by the settings UI; runtimes build their own on the same storage. */
+    private val sessions = mutableMapOf<String, MorneyeSignedSession>()
 
     // ── Init ──────────────────────────────────────────────────────────────
 
@@ -163,11 +170,13 @@ object MorneyePackageManager {
 
     fun remove(key: String) {
         closeRuntime(key)
+        synchronized(runtimeLock) { sessions.remove(key) }
         File(packagesDir, key).deleteRecursively()
         MorneyeAddonStorage(context, key).purge()
         val updated = _packages.value.filter { it.key != key }
         persistPackages(updated)
         _packages.value = updated
+        bumpSessionRevision()
     }
 
     // ── Registry ──────────────────────────────────────────────────────────
@@ -230,6 +239,119 @@ object MorneyePackageManager {
 
     internal fun storage(key: String): MorneyeAddonStorage = MorneyeAddonStorage(context, key)
 
+    // ── Signed sessions (Tidal / Qobuz / Amazon / Deezer) ──────────────────
+
+    /**
+     * Whether this addon needs the gateway session at all. Metadata-only and
+     * JioSaavn-style addons return null, so the settings screen knows not to
+     * offer a Connect button.
+     */
+    internal fun signedSessionConfig(key: String): MorneyeSignedSessionConfig? {
+        val pkg = _packages.value.firstOrNull { it.key == key } ?: return null
+        val manifest = runCatching { JSONObject(pkg.manifestJson) }.getOrDefault(JSONObject())
+        return MorneyeSignedSessionConfig.fromManifest(manifest)
+    }
+
+    /** The last known connection state, without making a network call. */
+    fun signedSessionStatus(key: String): MorneyeSignedSessionStatus? {
+        val session = session(key) ?: return null
+        val status = session.status()
+        return MorneyeSignedSessionStatus(
+            authenticated = status.optBoolean("authenticated"),
+            verificationRequired = status.optBoolean("verification_required"),
+            expiresAt = status.optString("expires_at"),
+            authUrl = status.optString("auth_url"),
+            sessionId = status.optString("session_id"),
+            installId = status.optString("install_id"),
+            appVersion = status.optString("app_version"),
+        )
+    }
+
+    /**
+     * Starts verification (or returns null when the addon is already
+     * connected). The returned URL must be opened in a browser; the gateway
+     * redirects to `mornye://session-grant`, which the app handles.
+     */
+    suspend fun beginSignedSession(key: String): String? = withContext(Dispatchers.IO) {
+        val session = session(key) ?: return@withContext null
+        session.begin().also { bumpSessionRevision() }
+    }
+
+    /** Completes a verification callback for one addon. */
+    suspend fun completeSignedSessionGrant(
+        key: String,
+        raw: String,
+    ): MorneyeSignedSessionStatus? = withContext(Dispatchers.IO) {
+        val session = session(key) ?: return@withContext null
+        val result = session.completeGrant(raw)
+        if (!result.optBoolean("success")) {
+            throw IllegalStateException(
+                result.optString("error").ifBlank { "Signed-session exchange failed" },
+            )
+        }
+        bumpSessionRevision()
+        signedSessionStatus(key)
+    }
+
+    /**
+     * Finds the addon whose pending challenge matches an incoming
+     * `mornye://session-grant` callback and completes it.
+     *
+     * Only links that carry a `state` are matched automatically: a bare grant
+     * has no owner, and guessing would send it to the first addon in the list.
+     */
+    suspend fun completeSignedSessionCallback(raw: String): InstalledMorneyePackage? =
+        withContext(Dispatchers.IO) {
+            val state = runCatching {
+                java.net.URI(raw).rawQuery
+                    ?.split('&')
+                    ?.mapNotNull { part ->
+                        val idx = part.indexOf('=')
+                        if (idx <= 0) null else
+                            java.net.URLDecoder.decode(part.substring(0, idx), "UTF-8") to
+                                java.net.URLDecoder.decode(part.substring(idx + 1), "UTF-8")
+                    }
+                    ?.toMap()
+                    ?.get("state")
+            }.getOrNull()
+            if (state.isNullOrBlank()) return@withContext null
+
+            for (pkg in _packages.value) {
+                val session = session(pkg.key) ?: continue
+                val status = signedSessionStatus(pkg.key) ?: continue
+                if (!status.authUrl.contains("state=$state")) continue
+                val result = session.completeGrant(raw)
+                if (result.optBoolean("success")) {
+                    bumpSessionRevision()
+                    TrackLog.d(TAG, "Signed session connected for ${pkg.displayName}")
+                    return@withContext pkg
+                }
+                TrackLog.w(
+                    TAG,
+                    "Signed session callback for ${pkg.displayName} failed: ${result.optString("error")}",
+                )
+            }
+            null
+        }
+
+    suspend fun clearSignedSession(key: String) = withContext(Dispatchers.IO) {
+        session(key)?.clear()
+        bumpSessionRevision()
+    }
+
+    private fun session(key: String): MorneyeSignedSession? = synchronized(runtimeLock) {
+        val pkg = _packages.value.firstOrNull { it.key == key } ?: return null
+        val manifest = runCatching { JSONObject(pkg.manifestJson) }.getOrDefault(JSONObject())
+        val config = MorneyeSignedSessionConfig.fromManifest(manifest) ?: return null
+        sessions.getOrPut(key) {
+            MorneyeSignedSession(config, MorneyeAddonStorage(context, key), Http.client)
+        }
+    }
+
+    private fun bumpSessionRevision() {
+        _sessionRevision.value = System.currentTimeMillis()
+    }
+
     fun currentSettings(key: String): String {
         // Settings are stored per-addon as a JSON object in encrypted prefs.
         return storage(key).get("__settings") ?: "{}"
@@ -267,6 +389,7 @@ object MorneyePackageManager {
             storage     = MorneyeAddonStorage(context, pkg.key),
             settingsJson = currentSettings(pkg.key),
             permissions = permissions + setOf("network", "storage"),
+            signedSessionConfig = MorneyeSignedSessionConfig.fromManifest(manifest),
         )
     }
 
@@ -393,3 +516,14 @@ object MorneyePackageManager {
 }
 
 class MorneyeInstallException(message: String) : Exception(message)
+
+/** A gateway connection as the settings screen needs to show it. */
+data class MorneyeSignedSessionStatus(
+    val authenticated: Boolean,
+    val verificationRequired: Boolean,
+    val expiresAt: String,
+    val authUrl: String,
+    val sessionId: String,
+    val installId: String,
+    val appVersion: String,
+)

@@ -39,6 +39,7 @@ internal class MorneyeRuntime(
     private val storage: MorneyeAddonStorage,
     private val settingsJson: String = "{}",
     private val permissions: Set<String> = setOf("network", "storage"),
+    private val signedSessionConfig: MorneyeSignedSessionConfig? = null,
 ) : AutoCloseable {
 
     companion object {
@@ -123,6 +124,7 @@ internal class MorneyeRuntime(
             packageDir = packageDir,
             cacheDir = cacheDir.also { it.mkdirs() },
             invokeCallback = { _, _ -> """{"value":null}""" },
+            signedSessionConfig = signedSessionConfig,
         )
 
         // Use Dispatchers.IO so blocking HTTP inside FunctionBinding is fine.
@@ -184,6 +186,7 @@ internal class MorneyeRuntime(
 
     private fun buildConfigJson(): String = JSONObject().apply {
         put("settings", runCatching { JSONObject(settingsJson) }.getOrDefault(JSONObject()))
+        put("sessionEnabled", signedSessionConfig != null)
         put("permissions", JSONObject().apply {
             put("storage", "storage" in permissions)
             put("network", JSONArray(

@@ -1,5 +1,6 @@
 package com.music.bitchord.ui.screens
 
+import android.content.Intent
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -19,6 +20,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -26,8 +28,10 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -47,6 +51,7 @@ import com.music.bitchord.data.sources.mornye.InstalledMorneyePackage
 import com.music.bitchord.data.sources.mornye.MorneyeInstallException
 import com.music.bitchord.data.sources.mornye.MorneyePackageManager
 import com.music.bitchord.data.sources.mornye.MorneyeRegistryEntry
+import com.music.bitchord.data.sources.mornye.MorneyeSignedSessionStatus
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -74,6 +79,32 @@ fun MorneyeScreen(
     var registryError   by remember { mutableStateOf<String?>(null) }
     var busyKeys        = remember { mutableStateListOf<String>() }
     var message         by remember { mutableStateOf<String?>(null) }
+
+    // Signed-session state for the providers that need it (Tidal, Qobuz,
+    // Amazon, Deezer). Reloaded whenever the manager connects, clears or
+    // exchanges a session, so the rows do not need to poll.
+    val sessionRevision by MorneyePackageManager.sessionRevision.collectAsState()
+    var signedKeys      by remember { mutableStateOf<Set<String>>(emptySet()) }
+    var sessionStatuses by remember {
+        mutableStateOf<Map<String, MorneyeSignedSessionStatus>>(emptyMap())
+    }
+    var pasteTarget     by remember { mutableStateOf<InstalledMorneyePackage?>(null) }
+    var pasteText       by remember { mutableStateOf("") }
+
+    LaunchedEffect(packages, sessionRevision) {
+        val (keys, statuses) = withContext(Dispatchers.IO) {
+            val keys = packages
+                .mapNotNull { pkg ->
+                    pkg.key.takeIf { MorneyePackageManager.signedSessionConfig(it) != null }
+                }
+                .toSet()
+            keys to keys.mapNotNull { key ->
+                MorneyePackageManager.signedSessionStatus(key)?.let { key to it }
+            }.toMap()
+        }
+        signedKeys = keys
+        sessionStatuses = statuses
+    }
 
     // Load registry on first composition.
     LaunchedEffect(Unit) {
@@ -154,6 +185,8 @@ fun MorneyeScreen(
                 InstalledAddonRow(
                     pkg     = pkg,
                     busy    = pkg.key in busyKeys,
+                    requiresSession = pkg.key in signedKeys,
+                    sessionStatus = sessionStatuses[pkg.key],
                     onToggle = { MorneyePackageManager.setEnabled(pkg.key, it) },
                     onRemove = {
                         scope.launch {
@@ -161,6 +194,44 @@ fun MorneyeScreen(
                             MorneyePackageManager.remove(pkg.key)
                             busyKeys.remove(pkg.key)
                             message = "${pkg.displayName} removed."
+                        }
+                    },
+                    onConnect = {
+                        scope.launch {
+                            busyKeys.add(pkg.key)
+                            runCatching {
+                                val url = MorneyePackageManager.beginSignedSession(pkg.key)
+                                if (url.isNullOrBlank()) {
+                                    "Already connected."
+                                } else {
+                                    val opened = runCatching {
+                                        context.startActivity(
+                                            Intent(Intent.ACTION_VIEW, Uri.parse(url))
+                                                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+                                        )
+                                    }.isSuccess
+                                    if (opened) {
+                                        "Complete verification in the browser, then return here. " +
+                                            "If no redirect appears, copy the link the page shows and use Paste link."
+                                    } else {
+                                        "No browser available. Copy the verification link and open it manually."
+                                    }
+                                }
+                            }.onSuccess { message = it }
+                                .onFailure { message = "Connection failed: ${it.message}" }
+                            busyKeys.remove(pkg.key)
+                        }
+                    },
+                    onPasteGrant = {
+                        pasteTarget = pkg
+                        pasteText = ""
+                    },
+                    onDisconnect = {
+                        scope.launch {
+                            busyKeys.add(pkg.key)
+                            MorneyePackageManager.clearSignedSession(pkg.key)
+                            busyKeys.remove(pkg.key)
+                            message = "${pkg.displayName} disconnected."
                         }
                     },
                 )
@@ -235,14 +306,72 @@ fun MorneyeScreen(
 
         item { Spacer(Modifier.height(80.dp)) }
     }
+
+    pasteTarget?.let { target ->
+        AlertDialog(
+            onDismissRequest = { pasteTarget = null },
+            title = { Text("Paste verification link") },
+            text = {
+                Column {
+                    Text(
+                        "After approving access, the verification page shows a " +
+                            "mornye://session-grant link. Paste the whole link (or just the grant) here.",
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                    Spacer(Modifier.height(12.dp))
+                    OutlinedTextField(
+                        value = pasteText,
+                        onValueChange = { pasteText = it },
+                        label = { Text("mornye://session-grant?…") },
+                        minLines = 2,
+                        maxLines = 4,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    enabled = pasteText.isNotBlank() && target.key !in busyKeys,
+                    onClick = {
+                        val raw = pasteText
+                        pasteTarget = null
+                        pasteText = ""
+                        scope.launch {
+                            busyKeys.add(target.key)
+                            runCatching {
+                                MorneyePackageManager.completeSignedSessionGrant(target.key, raw)
+                            }.onSuccess { status ->
+                                message = if (status?.authenticated == true) {
+                                    "${target.displayName} connected."
+                                } else {
+                                    "The link was accepted but no session was issued. Try Connect again."
+                                }
+                            }.onFailure {
+                                message = "Verification failed: ${it.message}"
+                            }
+                            busyKeys.remove(target.key)
+                        }
+                    },
+                ) { Text("Verify") }
+            },
+            dismissButton = {
+                TextButton(onClick = { pasteTarget = null }) { Text("Cancel") }
+            },
+        )
+    }
 }
 
 @Composable
 private fun InstalledAddonRow(
     pkg: InstalledMorneyePackage,
     busy: Boolean,
+    requiresSession: Boolean,
+    sessionStatus: MorneyeSignedSessionStatus?,
     onToggle: (Boolean) -> Unit,
     onRemove: () -> Unit,
+    onConnect: () -> Unit,
+    onPasteGrant: () -> Unit,
+    onDisconnect: () -> Unit,
 ) {
     var expanded by remember { mutableStateOf(false) }
 
@@ -297,6 +426,59 @@ private fun InstalledAddonRow(
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
+
+                if (requiresSession) {
+                    Spacer(Modifier.height(12.dp))
+                    HorizontalDivider()
+                    Spacer(Modifier.height(12.dp))
+                    Text(
+                        "Provider connection",
+                        style = MaterialTheme.typography.labelLarge,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        signedSessionLabel(sessionStatus),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = when {
+                            sessionStatus?.authenticated == true -> MaterialTheme.colorScheme.primary
+                            sessionStatus?.verificationRequired == true -> MaterialTheme.colorScheme.error
+                            else -> MaterialTheme.colorScheme.onSurfaceVariant
+                        },
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        if (sessionStatus?.authenticated != true) {
+                            Button(
+                                onClick = onConnect,
+                                enabled = !busy,
+                            ) {
+                                Text(
+                                    if (sessionStatus?.verificationRequired == true) {
+                                        "Continue verification"
+                                    } else {
+                                        "Connect"
+                                    },
+                                )
+                            }
+                        }
+                        OutlinedButton(
+                            onClick = onPasteGrant,
+                            enabled = !busy,
+                        ) { Text("Paste link") }
+                        if (sessionStatus?.authenticated == true ||
+                            sessionStatus?.verificationRequired == true
+                        ) {
+                            TextButton(onClick = onDisconnect, enabled = !busy) {
+                                Text("Disconnect")
+                            }
+                        }
+                    }
+                }
+
                 Spacer(Modifier.height(10.dp))
                 Button(
                     onClick  = onRemove,
@@ -312,6 +494,23 @@ private fun InstalledAddonRow(
         }
     }
 }
+
+private fun signedSessionLabel(status: MorneyeSignedSessionStatus?): String = when {
+    status == null -> "Not connected."
+    status.authenticated -> "Connected" + status.expiresAt
+        .takeIf { it.isNotBlank() }
+        ?.let { " · expires ${formatSessionExpiry(it)}" }
+        .orEmpty()
+    status.verificationRequired ->
+        "Waiting for verification. Finish in the browser, or paste the link the page shows."
+    else -> "Not connected."
+}
+
+private fun formatSessionExpiry(raw: String): String = runCatching {
+    java.time.Instant.parse(raw)
+        .atZone(java.time.ZoneId.systemDefault())
+        .format(java.time.format.DateTimeFormatter.ofPattern("d MMM, HH:mm"))
+}.getOrDefault(raw)
 
 @Composable
 private fun RegistryEntryRow(

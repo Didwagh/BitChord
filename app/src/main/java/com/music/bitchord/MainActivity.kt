@@ -123,6 +123,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.music.bitchord.auth.DiscordLoginScreen
 import com.music.bitchord.auth.SpotifyLoginScreen
@@ -155,6 +156,7 @@ import com.music.bitchord.data.model.durationMillis
 import com.music.bitchord.data.scrobbling.LastFM
 import com.music.bitchord.data.settings.AppSettings
 import com.music.bitchord.data.settings.BitPerfectMode
+import com.music.bitchord.data.sources.mornye.MorneyePackageManager
 import com.music.bitchord.ui.AddonBlockedAlert
 import com.music.bitchord.data.settings.LibrarySort
 import com.music.bitchord.data.settings.ThemeMode
@@ -394,6 +396,8 @@ class MainActivity : AppCompatActivity() {
         // the request already standing by the time BitChordApp first reads it.
         PlayerDeepLink.consume(intent)
         JamInviteLink.consume(intent)
+        // The gateway's browser verification comes back as mornye://session-grant.
+        consumeMorneyeGrant(intent)
         // Likewise for a link tapped or shared from another app — see [MusicLink].
         MusicLink.consume(intent)
         setContent {
@@ -502,7 +506,37 @@ class MainActivity : AppCompatActivity() {
         setIntent(intent)
         PlayerDeepLink.consume(intent)
         JamInviteLink.consume(intent)
+        consumeMorneyeGrant(intent)
         MusicLink.consume(intent)
+    }
+
+    /**
+     * Completes a signed-session verification returned by the browser.
+     *
+     * `mornye://session-grant` carries a one-time grant; the manager finds the
+     * addon whose pending challenge has the same `state`, exchanges the grant
+     * and stores the session in that addon's encrypted prefs. The callback can
+     * arrive before the composition exists (cold launch) or on an existing
+     * task, so both paths call this.
+     */
+    private fun consumeMorneyeGrant(intent: Intent?) {
+        val data = intent?.data ?: return
+        val scheme = data.scheme?.lowercase()
+        if (scheme != "mornye" && scheme != "spotiflac") return
+        if (data.host?.lowercase() != "session-grant") return
+        if (intent.getBooleanExtra("bitchord.mornyeGrantConsumed", false)) return
+        intent.putExtra("bitchord.mornyeGrantConsumed", true)
+        val raw = data.toString()
+        lifecycleScope.launch {
+            val pkg = withContext(Dispatchers.IO) {
+                MorneyePackageManager.completeSignedSessionCallback(raw)
+            }
+            Toast.makeText(
+                this@MainActivity,
+                if (pkg != null) "${pkg.displayName} connected" else "Verification link was not accepted",
+                Toast.LENGTH_LONG,
+            ).show()
+        }
     }
 }
 

@@ -18,7 +18,7 @@ import com.music.bitchord.auth.EncryptedPrefs
 internal class MorneyeAddonStorage(
     private val context: Context,
     private val addonKey: String,
-) {
+) : MorneyeSignedSessionStore {
     private val prefs: SharedPreferences by lazy {
         // EncryptedPrefs.open(context, encryptedName, plaintextFallbackName)
         EncryptedPrefs.open(
@@ -30,9 +30,9 @@ internal class MorneyeAddonStorage(
 
     // ── Plain storage (addon's globalThis.storage) ────────────────────────
 
-    fun get(key: String): String? = prefs.getString("s:$key", null)
+    override fun get(key: String): String? = prefs.getString("s:$key", null)
 
-    fun set(key: String, value: String) =
+    override fun set(key: String, value: String) =
         prefs.edit().putString("s:$key", value).apply()
 
     fun remove(key: String) =

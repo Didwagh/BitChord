@@ -101,6 +101,28 @@ internal const val MORNYE_BOOTSTRAP = """
     clearCookies:function(){return call('http.clearCookies');},
   };
   globalThis.fetch=function(u,o){o=o||{};return request(u,o.method,o.body,o.headers);};
+  // Signed-session providers (Tidal, Qobuz, Amazon, Deezer) read this global
+  // before every request. It exists only when the addon's manifest declares a
+  // `signedSession` block; the host owns the keys, the signing and the
+  // verification URL, exactly as the Mornye desktop runtime does.
+  if(config.sessionEnabled){
+    globalThis.session={
+      status:function(){return call('session.status');},
+      clear:function(){return call('session.clear');},
+      completeGrant:function(grant){
+        return call('session.completeGrant',arguments.length?[String(grant)]:[]);
+      },
+      signedFetch:function(method,path,body,headers){
+        if(arguments.length<2)return {ok:false,error:'signedFetch needs a method and a path'};
+        var payload;
+        try{payload=body==null?'':(typeof body==='object'?goJSON(body):String(body));}
+        catch(e){return {ok:false,error:String(e&&e.message?e.message:e)};}
+        return call('session.signedFetch',[
+          String(method||'GET'),String(path||''),payload,headers||{}
+        ]);
+      }
+    };
+  }
   var _file=function(path){return call('file',[String(path)]);};
   _file.download=function(url,path,opts){return call('file.download',[String(url),String(path),opts||{}]);};
   _file.downloadSegments=function(urls,path,opts){return call('file.downloadSegments',[urls||[],String(path),opts||{}]);};

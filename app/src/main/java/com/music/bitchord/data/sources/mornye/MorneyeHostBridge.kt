@@ -30,6 +30,7 @@ internal class MorneyeHostBridge(
     /** Directory for addon-written temp/download files — typically <cacheDir>/mornye/<addonKey>/ */
     private val cacheDir: File,
     private val invokeCallback: (id: Int, args: JSONArray) -> String,
+    signedSessionConfig: MorneyeSignedSessionConfig? = null,
 ) {
     companion object {
         private const val TAG = "BitChord/Mornye"
@@ -44,6 +45,15 @@ internal class MorneyeHostBridge(
             .readTimeout(90, TimeUnit.SECONDS)
             .callTimeout(120, TimeUnit.SECONDS)
             .build()
+    }
+
+    /**
+     * The gateway client for addons whose manifest declares `signedSession`.
+     * Constructed lazily, but before the first bridge call: signing is
+     * synchronous, like the rest of this bridge.
+     */
+    private val signedSession: MorneyeSignedSession? by lazy {
+        signedSessionConfig?.let { MorneyeSignedSession(it, storage, httpClient) }
     }
 
     fun handle(method: String, argsJson: String): String {
@@ -85,8 +95,52 @@ internal class MorneyeHostBridge(
         "crypto.random"                 -> handleRandom(args)
         "crypto.sign"                   -> JSONObject().apply { put("value", "") }
         "utils.sleep"                   -> handleSleep(args)
+        "session.status"                -> handleSessionStatus()
+        "session.clear"                 -> handleSessionClear()
+        "session.completeGrant"         -> handleSessionCompleteGrant(args)
+        "session.signedFetch"           -> handleSessionSignedFetch(args)
         "log"                           -> { TrackLog.d(TAG, "[addon] ${args.optString(0)}"); null }
         else                            -> { TrackLog.d(TAG, "bridge: unhandled $method"); null }
+    }
+
+    // ── Signed session ────────────────────────────────────────────────────
+
+    private fun handleSessionStatus(): JSONObject =
+        signedSession?.status() ?: JSONObject().apply {
+            put("authenticated", false)
+            put("verification_required", false)
+            put("error", "signed session runtime is not available")
+        }
+
+    private fun handleSessionClear(): JSONObject =
+        signedSession?.clear() ?: JSONObject().apply {
+            put("success", false)
+            put("error", "signed session runtime is not available")
+        }
+
+    private fun handleSessionCompleteGrant(args: JSONArray): JSONObject {
+        val session = signedSession ?: return JSONObject().apply {
+            put("success", false)
+            put("error", "signed session runtime is not available")
+        }
+        val grant = if (args.length() > 0 && !args.isNull(0)) args.optString(0) else null
+        return session.completeGrant(grant)
+    }
+
+    private fun handleSessionSignedFetch(args: JSONArray): JSONObject {
+        val session = signedSession ?: return JSONObject().apply {
+            put("ok", false)
+            put("status", 0)
+            put("statusCode", 0)
+            put("error", "signed session runtime is not available")
+        }
+        val method = args.optString(0, "GET")
+        val path = args.optString(1)
+        val body = if (args.length() > 2 && !args.isNull(2)) args.optString(2) else ""
+        val headers = args.optJSONObject(3)?.let { obj ->
+            buildMap { for (k in obj.keys()) put(k, obj.optString(k)) }
+        }.orEmpty()
+        return session.signedFetch(method, path, body, headers)
     }
 
     // ── HTTP ──────────────────────────────────────────────────────────────
