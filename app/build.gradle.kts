@@ -453,6 +453,11 @@ dependencies {
     // the OkHttp version already on the runtime classpath.
     testImplementation("com.squareup.okhttp3:mockwebserver:5.3.2")
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.10.2")
+    // The app's own `org.json` is the Android stub in local unit tests, whose
+    // keys()/opt() return defaults instead of parsing. Manifests arrive as
+    // JSONObject/JSONArray at runtime, so the test that checks that shape needs
+    // the real implementation on the test classpath.
+    testImplementation("org.json:json:20240303")
     androidTestImplementation("androidx.test.ext:junit:1.3.0")
     androidTestImplementation("androidx.test.espresso:espresso-core:3.7.0")
 }

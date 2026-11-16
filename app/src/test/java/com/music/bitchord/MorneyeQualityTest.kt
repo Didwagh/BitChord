@@ -11,6 +11,7 @@ import com.music.bitchord.data.sources.mornye.kbpsOf
 import com.music.bitchord.data.sources.mornye.normaliseCodec
 import com.music.bitchord.data.sources.mornye.sampleRateFromLabel
 import com.music.bitchord.data.sources.mornye.sampleRateOf
+import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -103,6 +104,32 @@ class MorneyeQualityTest {
         // manifest names `download_provider`.
         assertTrue(caps.searches)
         assertTrue(caps.downloads)
+    }
+
+    @Test
+    fun `a manifest read out of JSONObject still exposes its quality tiers`() {
+        // This is the shape the package manager actually hands over: opt()
+        // returns JSONArray/JSONObject, not List/Map. Asserting only the
+        // Kotlin-built map above is what let production ask every addon for
+        // its "default" tier while the tests said it ranked them.
+        val manifest = JSONObject(
+            """
+            {
+              "type": ["metadata_provider", "download_provider"],
+              "qualityOptions": [
+                {"id": "best", "label": "FLAC Best Available", "kind": "lossless"},
+                {"id": "opus", "label": "Opus 320kbps", "kind": "lossy"}
+              ]
+            }
+            """.trimIndent(),
+        )
+        val caps = capabilitiesOf(manifest.keys().asSequence().associateWith { manifest.opt(it) })
+
+        assertTrue(caps.searches)
+        assertTrue(caps.downloads)
+        assertEquals(listOf("best", "opus"), caps.qualityOptions.map { it.id })
+        assertTrue(caps.qualityOptions[0].isLossless)
+        assertEquals(320, caps.qualityOptions[1].kbps)
     }
 
     @Test

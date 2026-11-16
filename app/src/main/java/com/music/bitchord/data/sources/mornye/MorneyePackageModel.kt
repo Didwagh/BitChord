@@ -225,13 +225,34 @@ internal fun parseMorneyeDownloadResult(result: Any?): MorneyeDownloadResult {
     )
 }
 
+/**
+ * Reads an array from a manifest value.
+ *
+ * A manifest reaches this function two ways: straight from `JSONObject` while
+ * a package is installed (`JSONArray`, `JSONObject`) and from a test or a
+ * Kotlin-built map (`List`, `Map`). Accepting only the latter made every real
+ * addon report an empty `type` and no quality tiers, so playback always asked
+ * for the addon's `default` and never saw the lossless tier the manifest
+ * declared.
+ */
+private fun manifestArray(value: Any?): List<Any?> = when (value) {
+    is JSONArray -> (0 until value.length()).map { value.opt(it) }
+    is List<*>   -> value
+    else         -> emptyList()
+}
+
+private fun manifestObject(value: Any?): Map<*, *>? = when (value) {
+    is JSONObject -> value.keys().asSequence().associateWith { value.opt(it) }
+    is Map<*, *>  -> value
+    else          -> null
+}
+
 internal fun capabilitiesOf(manifest: Map<String, Any?>): MorneyeCapabilities {
-    @Suppress("UNCHECKED_CAST")
-    val type = manifest["type"] as? List<*> ?: emptyList<Any>()
+    val type = manifestArray(manifest["type"])
     val searches = type.any { it.toString() in setOf("download_provider", "metadata_provider") }
-    @Suppress("UNCHECKED_CAST")
-    val qualityRaw = manifest["qualityOptions"] as? List<*> ?: emptyList<Any>()
-    val qualities = qualityRaw.filterIsInstance<Map<*, *>>().mapNotNull { q ->
+    val qualityRaw = manifestArray(manifest["qualityOptions"])
+    val qualities = qualityRaw.mapNotNull { raw ->
+        val q = manifestObject(raw) ?: return@mapNotNull null
         val id    = q["id"]?.toString() ?: return@mapNotNull null
         val label = q["label"]?.toString() ?: id
         val codec = (q["codec"] ?: q["format"] ?: q["fileType"])?.toString()
@@ -241,10 +262,14 @@ internal fun capabilitiesOf(manifest: Map<String, Any?>): MorneyeCapabilities {
         // A family is a claim like a label is; the bytes still decide the
         // format that is reported.
         val kind = q["kind"]?.toString()?.lowercase()
-        val declaredLossless = q["lossless"] as? Boolean
+        val explicitLossless = q["lossless"] as? Boolean
             ?: (q["isLossless"] as? Boolean)
             ?: (q["is_lossless"] as? Boolean)
-            ?: (kind == "lossless")
+        val isLossless = explicitLossless ?: when (kind) {
+            "lossless"         -> true
+            "lossy", "spatial" -> false
+            else               -> isLosslessClaim(codec, label)
+        }
         val kbps = sequenceOf("kbps", "bitrate", "bit_rate", "bitrate_kbps")
             .mapNotNull { key -> q[key]?.let(::kbpsOf) }
             .firstOrNull() ?: kbpsFromLabel(label)
@@ -261,10 +286,10 @@ internal fun capabilitiesOf(manifest: Map<String, Any?>): MorneyeCapabilities {
             kbps = kbps,
             sampleRateHz = sampleRate,
             bitDepth = bitDepth,
-            isLossless = declaredLossless ?: isLosslessClaim(codec, label),
+            isLossless = isLossless,
         )
     }
-    val access = (manifest["access"] as? Map<*, *>)?.get("kind")?.toString()
+    val access = manifestObject(manifest["access"])?.get("kind")?.toString()
     // A metadata-only addon (Apple Music, Spotify) can search but has no
     // download() to hand playback a file. Reporting searches as downloads made
     // every search row look playable and sent prefetch into a `download` call
