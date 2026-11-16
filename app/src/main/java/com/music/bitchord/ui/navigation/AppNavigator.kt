@@ -29,6 +29,9 @@ sealed interface AppRoute {
     data object Downloads : AppRoute
     data object Mornye : AppRoute
 
+    /** Settings → Diagnostics: the in-app log, filterable and exportable. */
+    data object Diagnostics : AppRoute
+
     /** A Library shelf's "Show all" — its own cards laid out again as a grid. */
     data class LibraryShowAll(val shelf: HomeShelf) : AppRoute
 

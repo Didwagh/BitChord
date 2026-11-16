@@ -204,6 +204,8 @@ fun SettingsScreen(
     onSpotifyCanvasAuth: () -> Unit,
     onAppLanguage: () -> Unit,
     onEditSignatureApi: () -> Unit,
+    /** Opens Settings → Diagnostics: the in-app log. */
+    onDiagnostics: () -> Unit,
     /**
      * Asks before [mode] is turned on: it hands volume to the DAC at full
      * scale. Shown in the app's frosted alert, which needs the app's blur.
@@ -1700,6 +1702,15 @@ fun SettingsScreen(
                         )
                     },
                     onClick = { AppSettings.setShowNerdStats(!nerdStats) },
+                )
+            }
+            val diagnosticsTitle = "Diagnostics"
+            row(diagnosticsTitle, "log", "debug", "mornye", "troubleshoot") {
+                SettingsRow(
+                    icon = SfIcons.Bug,
+                    title = diagnosticsTitle,
+                    subtitle = "How each track was resolved and played, with copy and share",
+                    onClick = onDiagnostics,
                 )
             }
             val appIconTitle = stringResource(R.string.app_icon)

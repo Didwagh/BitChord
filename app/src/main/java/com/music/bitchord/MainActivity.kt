@@ -174,6 +174,7 @@ import com.music.bitchord.ui.screens.AccountAndScrobblingScreen
 import com.music.bitchord.ui.screens.DiscordDialog
 import com.music.bitchord.ui.screens.DiscordDialogHost
 import com.music.bitchord.ui.screens.DiscordScreen
+import com.music.bitchord.ui.screens.DiagnosticsScreen
 import com.music.bitchord.ui.screens.EqualizerScreen
 import com.music.bitchord.ui.screens.HistoryScreen
 import com.music.bitchord.ui.screens.LibraryReplayEntry
@@ -3023,6 +3024,8 @@ private fun BitChordApp(
                             com.music.bitchord.ui.screens.MorneyeScreen(
                                 onBack = { navigator.pop() },
                             )
+                        } else if (pageRoute == AppRoute.Diagnostics) {
+                            DiagnosticsScreen(contentPadding = listPadding)
                         } else if (pageRoute == AppRoute.Downloads) {
                             DownloadManagerPage(
                                 onCleared = { navigator.pop() },
@@ -3092,6 +3095,7 @@ private fun BitChordApp(
                                 onSpotifyCanvasAuth = { showSpotifyCanvasAuth = true },
                                 onAppLanguage = { showAppLanguage = true },
                                 onEditSignatureApi = { editingSignatureApi = true },
+                                onDiagnostics = { navigator.push(AppRoute.Diagnostics) },
                                 onConfirmBitPerfect = { confirmBitPerfect = it },
                                 onConfirmFixedVolume = { confirmFixedVolume = true },
                                 contentPadding = listPadding,
@@ -3749,6 +3753,7 @@ private fun BitChordApp(
                         AppRoute.WearOs -> stringResource(R.string.wear_os_page_title)
                         AppRoute.Equalizer -> stringResource(R.string.equalizer)
                         AppRoute.Mornye -> "Mornye Extensions"
+                        AppRoute.Diagnostics -> "Diagnostics"
                         AppRoute.Settings -> stringResource(R.string.settings)
                         is AppRoute.SettingsSection -> stringResource(route.category.title)
                         is AppRoute.SettingsChoice -> stringResource(route.choice.title)

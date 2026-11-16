@@ -80,32 +80,32 @@ object TrackLog {
 
     fun d(tag: String, message: String, about: String? = working.get()) {
         echo?.invoke('D', tag, message, null)
-        record('D', message, about)
+        record('D', tag, message, about)
     }
 
     fun i(tag: String, message: String, about: String? = working.get()) {
         echo?.invoke('I', tag, message, null)
-        record('I', message, about)
+        record('I', tag, message, about)
     }
 
     fun w(tag: String, message: String, about: String? = working.get()) {
         echo?.invoke('W', tag, message, null)
-        record('W', message, about)
+        record('W', tag, message, about)
     }
 
     fun w(tag: String, message: String, error: Throwable, about: String? = working.get()) {
         echo?.invoke('W', tag, message, error)
-        record('W', "$message\n${error.stackTraceToString()}", about)
+        record('W', tag, "$message\n${error.stackTraceToString()}", about)
     }
 
     fun e(tag: String, message: String, about: String? = working.get()) {
         echo?.invoke('E', tag, message, null)
-        record('E', message, about)
+        record('E', tag, message, about)
     }
 
     fun e(tag: String, message: String, error: Throwable, about: String? = working.get()) {
         echo?.invoke('E', tag, message, error)
-        record('E', "$message\n${error.stackTraceToString()}", about)
+        record('E', tag, "$message\n${error.stackTraceToString()}", about)
     }
 
     // ── Whose line is it ────────────────────────────────────────────────────
@@ -132,7 +132,7 @@ object TrackLog {
      */
     fun about(id: String?): CoroutineContext = working.asContextElement(id)
 
-    private class Line(val at: Long, val level: Char, val text: String, val track: String?)
+    private class Line(val at: Long, val level: Char, val tag: String, val text: String, val track: String?)
 
     private val lines = ArrayDeque<Line>()
 
@@ -145,14 +145,14 @@ object TrackLog {
      * limit that counts them the same either wastes memory or throws away the
      * history that matters.
      */
-    private fun record(level: Char, message: String, about: String?) {
+    private fun record(level: Char, tag: String, message: String, about: String?) {
         val text = if (message.length > MAX_LINE_CHARS) {
             message.take(MAX_LINE_CHARS) + "…(${message.length - MAX_LINE_CHARS} more)"
         } else {
             message
         }
         synchronized(lines) {
-            lines.addLast(Line(System.currentTimeMillis(), level, text, about))
+            lines.addLast(Line(System.currentTimeMillis(), level, tag, text, about))
             held += text.length
             while (held > MAX_HELD_CHARS && lines.isNotEmpty()) {
                 held -= lines.removeFirst().text.length
@@ -209,6 +209,97 @@ object TrackLog {
         header(song, stats, from, window.size, since.size - window.size) + "\n" +
             window.joinToString("\n") { "${CLOCK.format(Date(it.at))} ${it.level} ${it.text}" } +
             "\n"
+    }
+
+    // ── The whole log, for Settings → Diagnostics ───────────────────────────
+
+    /** One line as the diagnostics screen shows and copies it. */
+    data class Entry(
+        /** Wall-clock time the line was recorded, in milliseconds. */
+        val at: Long,
+        /** `D`, `I`, `W` or `E` — the same letters logcat uses. */
+        val level: Char,
+        /** The tag the line was logged under, e.g. `BitChord/Mornye`. */
+        val tag: String,
+        val text: String,
+        /** The track this line was filed against, when it was filed against one. */
+        val track: String?,
+    ) {
+        /** `14:02:11.384 W` — the clock and severity a log reader looks for first. */
+        fun stamp(): String = "${diagTime(at)} $level"
+
+        /** The whole line, as one text field for the clipboard. */
+        fun toText(): String = "${stamp()} $tag: $text"
+    }
+
+    /**
+     * Every line still held, oldest first, newest-last.
+     *
+     * The buffer is the same one [forTrack] reads, so the screen costs nothing
+     * until it is opened. [minLevel] drops lines below a severity; [track]
+     * keeps only the lines filed against one track; [tag] keeps only the lines
+     * logged under a tag containing it, which is how Diagnostics offers "just
+     * Mornye". All default to "everything".
+     */
+    suspend fun snapshot(
+        minLevel: Char = 'D',
+        track: String? = null,
+        tag: String? = null,
+    ): List<Entry> =
+        withContext(Dispatchers.Default) {
+            synchronized(lines) {
+                lines.asSequence()
+                    .filter { level(it.level) >= level(minLevel) }
+                    .filter { track == null || it.track == track }
+                    .filter { tag == null || it.tag.contains(tag, ignoreCase = true) }
+                    .map { Entry(it.at, it.level, it.tag, it.text, it.track) }
+                    .toList()
+            }
+        }
+
+    /**
+     * The whole held log as plain text, ready to hand to a share sheet.
+     *
+     * Deliberately plain: the file is read in another app, and a header naming
+     * the build is the only context it needs. [headerLines] is the same one
+     * Copy Log uses, so a pasted entry and an exported file agree about the
+     * device they came from.
+     */
+    suspend fun export(minLevel: Char = 'D', track: String? = null, tag: String? = null): String =
+        withContext(Dispatchers.Default) {
+            val held = snapshot(minLevel, track, tag)
+            buildString {
+                appendLine("BitChord diagnostics")
+                appendLine("exported: ${CLOCK.format(Date())}")
+                headerLines().forEach(::appendLine)
+                sourcesLine()?.let(::appendLine)
+                appendLine("${held.size} lines")
+                appendLine()
+                held.forEach { appendLine(it.toText()) }
+            }
+        }
+
+    /**
+     * Forgets every held line, and with it each track's remembered start.
+     *
+     * The diagnostics screen's Clear does this so the next capture starts from
+     * an empty page rather than a half-page of an earlier session. It does not
+     * touch logcat, which nothing here writes to in a release build.
+     */
+    fun clear() {
+        synchronized(lines) {
+            lines.clear()
+            held = 0
+        }
+        startedAt.clear()
+    }
+
+    /** Severity ordering, so "warning and above" means what a reader expects. */
+    private fun level(c: Char): Int = when (c) {
+        'E' -> 3
+        'W' -> 2
+        'I' -> 1
+        else -> 0
     }
 
     // ── The part that isn't the log ─────────────────────────────────────────
@@ -282,3 +373,13 @@ object TrackLog {
 
     private const val MAX_REMEMBERED = 32
 }
+
+/** The diagnostics screen's own clock; [TrackLog.CLOCK] is not reachable from a nested type. */
+private val DIAG_CLOCK = SimpleDateFormat("HH:mm:ss.SSS", Locale.US)
+
+/**
+ * [DIAG_CLOCK] is a [SimpleDateFormat], which holds parse state and is not
+ * thread-safe: the screen formats a line while an export on a worker thread
+ * formats hundreds. One lock, never contended in practice.
+ */
+private fun diagTime(at: Long): String = synchronized(DIAG_CLOCK) { DIAG_CLOCK.format(Date(at)) }

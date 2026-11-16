@@ -194,6 +194,21 @@ object AudioCache {
     /** Spacing between queued resolves, so warming the queue never competes with the track actually playing. */
     private const val QUEUE_RESOLVE_STAGGER_MS = 500L
 
+    /**
+     * How many source-backed rows ahead to warm.
+     *
+     * One. For a download-backed source the warm-up is the track's whole
+     * download, and the row after the next one is far enough out that the
+     * listener may well skip before it plays — the same reasoning that keeps
+     * the YouTube half to a single track of bytes. One is enough for a gapless
+     * run: by the time it is playing, the queue has moved and this runs again
+     * for the one after it.
+     */
+    private const val SOURCE_PREFETCH_DEPTH = 1
+
+    /** Spacing between source warm-ups, for the same reason as [QUEUE_RESOLVE_STAGGER_MS]. */
+    private const val SOURCE_PREFETCH_STAGGER_MS = 750L
+
     /** How many upcoming tracks are worth gathering for [prefetchQueue] — the caller doesn't need to know why. */
     const val QUEUE_DEPTH = QUEUE_LOOKAHEAD + 1
 
@@ -989,14 +1004,18 @@ object AudioCache {
         if (!::cache.isInitialized || mediaId.isBlank()) return null
         return keysOf(mediaId)
             .filterNot { it.endsWith("#watch") }
-            // Never an addon's own file. Those are kept to be *played* — see
-            // [keepsAddonCopy] — and an addon whose manifest says
-            // `allowDownloads: 0` plays but does not download. Copying its file
-            // out of the cache would be a download it was never asked about,
-            // so the network route decides instead, where that rule is applied.
+            // Never an addon's own file unless that addon permits downloads.
+            // These are kept to be *played* — see [keepsAddonCopy] — and an
+            // addon whose manifest says `allowDownloads: 0` plays but does not
+            // download. Copying its file out of the cache would be a download
+            // it was never asked about, so the network route decides instead,
+            // where that rule is applied. A Mornye addon that does permit
+            // downloads is the opposite case: the file is already here in the
+            // cache the folder lists, and saving it is the same act as saving
+            // any other complete copy.
             .filterNot { key ->
                 runCatching { cache.getContentMetadata(key).get(META_ORIGIN, null as String?) }
-                    .getOrNull() == Origin.OTHER.name
+                    .getOrNull() == Origin.OTHER.name && !addonCopyMayBeExported(key)
             }
             .mapNotNull { key ->
                 val length = runCatching { ContentMetadata.getContentLength(cache.getContentMetadata(key)) }
@@ -1006,6 +1025,22 @@ object AudioCache {
                 CompleteCopy(key, length, extension, mime)
             }
             .maxByOrNull { it.length }
+    }
+
+    /**
+     * Whether a cached addon copy may be filed as a download.
+     *
+     * The origin alone is not enough to refuse it: what matters is what that
+     * addon's manifest said about downloads, which is stored on its config so
+     * it can be answered without contacting it. A source the registry no
+     * longer knows is refused — its policy can't be checked.
+     */
+    private fun addonCopyMayBeExported(key: String): Boolean {
+        // Keys are `<configId>|<trackId>` with an optional `#rendition` after —
+        // see [phoneKey].
+        val configId = key.substringBefore('|', missingDelimiterValue = "")
+        if (configId.isBlank()) return false
+        return SourceRegistry.config(configId)?.allowDownloads == true
     }
 
     /** The container of the entry [key], from the magic at its very start. */
@@ -1387,6 +1422,15 @@ object AudioCache {
             // then cache it under a key playback is never going to ask for —
             // it plays the download instead. See [Song.toMediaItem].
             .filter { it !in Downloads.saved.value }
+        // Source-backed rows (Mornye, addons, JioSaavn) are not YouTube ids and
+        // were previously excluded from read-ahead outright. For Mornye that
+        // was the whole gap: `stream()` is what downloads the file, so leaving
+        // it until the track starts meant the listener waited out a full
+        // download at every transition. Warming the row here runs exactly the
+        // resolve playback will run a moment later, and [MorneyeSource] reuses
+        // the file it wrote.
+        val sourceRows = upcoming.filter { SourceRegistry.parseTrackKey(it.mediaId) != null }
+            .filter { it.mediaId !in Downloads.saved.value }
         // With substitution possible, only the *bytes* half drops out. Read-
         // ahead builds its own spec below from an id alone and carries none of
         // the title and artist a substitution is matched on — so it resolves
@@ -1404,75 +1448,128 @@ object AudioCache {
         // whenever the modules are slow, and warming it here is what makes the
         // race worth running at all.
         val substitutable = SourceResolver.canSubstituteForYouTube()
-        job = videoIds.firstOrNull()?.let { next ->
-            val target = upcoming.firstOrNull { it.mediaId == next }?.target
-            // A track the listener reverted plays from its own `#original`
-            // rendition — see [OriginalVersion] — while read-ahead builds its
-            // spec from an id alone and so writes under the plain key. Every
-            // byte of that would land in an entry playback is never going to
-            // read, and pinning a substitute for it would pin a source it is
-            // never going to use. The URL half below is still worth having: a
-            // reverted track resolves through YouTube, which is what it warms.
-            val pinnedToYouTube = OriginalVersion.isPinned(next)
-            scope.launch {
-                // With substitution on, the *bytes* half above used to be
-                // switched off outright, and the paragraph explaining why is
-                // still correct as far as it goes: read-ahead resolving to
-                // YouTube on its own would write Opus into the entry a
-                // higher-ranked source is about to fill.
-                //
-                // What it treated as impossible was knowing the answer in
-                // advance. A quick source can be asked *here* — see
-                // [SourceResolver.prefetchSubstitute] — and once its stream is
-                // recorded in [StreamChoice], the question stops being open:
-                // every later resolve for this track, read-ahead's own included,
-                // is held to that one stream. Both writers then agree on the
-                // file and on the `#alt` key it lands under, which is exactly
-                // the condition the byte half was missing.
-                //
-                // A source that is disabled, doesn't have the track, or fails
-                // leaves nothing pinned, and this falls through to the same
-                // URL-only warm-up it did before — YouTube resolves the track at
-                // playback time as usual.
-                // Not over an entry YouTube's own bytes already fill, from an
-                // earlier play: the player reads that head straight off disk,
-                // and the pin would then stream the substitute after it. That
-                // track's way up is the second look — see [heldByYouTube].
-                val youTubeFilled = heldByYouTube(cacheKeyOf(Uri.parse("bitchord://watch?v=$next")))
-                val warmed = if (substitutable && target != null && !pinnedToYouTube && !youTubeFilled) {
-                    runCatching { SourceResolver.prefetchSubstitute(target) }
-                        .onFailure { TrackLog.d(TAG, "warm-up substitute failed for $next: ${it.message}", about = next) }
-                        .getOrNull()
-                        ?.also { StreamChoice.remember(next, it, substituted = true) }
-                } else {
-                    null
+        // Source-backed rows, warmed by running the resolve playback will run.
+        // Only the nearest ones: this is the row that plays next, and for a
+        // download-backed source the warm-up *is* the download.
+        val sourceWarm = sourceRows.take(SOURCE_PREFETCH_DEPTH)
+        job = scope.launch {
+            if (sourceWarm.isNotEmpty()) launch {
+                delay(PREFETCH_DELAY_MS)
+                for (row in sourceWarm) {
+                    warmSource(row)
+                    delay(SOURCE_PREFETCH_STAGGER_MS)
                 }
-                // Safe to fill for the same reason in both cases: either nothing
-                // outranks YouTube and read-ahead is the only writer, or a
-                // source has been pinned and every writer now resolves to it.
-                val cacheBytes = (!substitutable || warmed != null) && !pinnedToYouTube
-                if (cacheBytes) {
-                    launch(TrackLog.about(next)) {
-                        delay(PREFETCH_DELAY_MS)
-                        fetch(next, 0, PRELOAD_BYTES)
-                        fetchWhole(next)
-                    }
-                }
+            }
+            videoIds.firstOrNull()?.let { next ->
+                val target = upcoming.firstOrNull { it.mediaId == next }?.target
+                // A track the listener reverted plays from its own `#original`
+                // rendition — see [OriginalVersion] — while read-ahead builds its
+                // spec from an id alone and so writes under the plain key. Every
+                // byte of that would land in an entry playback is never going to
+                // read, and pinning a substitute for it would pin a source it is
+                // never going to use. The URL half below is still worth having: a
+                // reverted track resolves through YouTube, which is what it warms.
+                val pinnedToYouTube = OriginalVersion.isPinned(next)
                 launch {
-                    delay(PREFETCH_DELAY_MS)
-                    for (id in videoIds.take(QUEUE_LOOKAHEAD + 1).let { if (cacheBytes) it.drop(1) else it }) {
-                        // A track already pinned to another source has no use
-                        // for a YouTube URL: nothing will ask for one, and
-                        // minting it spends a client walk to fill a cache entry
-                        // that is never read.
-                        if (id == next && warmed != null) continue
-                        runCatching { StreamResolver.resolve(id) }
-                            .onFailure { TrackLog.d(TAG, "queue warm-up skipped $id: ${it.message}", about = id) }
-                        delay(QUEUE_RESOLVE_STAGGER_MS)
+                    // With substitution on, the *bytes* half above used to be
+                    // switched off outright, and the paragraph explaining why is
+                    // still correct as far as it goes: read-ahead resolving to
+                    // YouTube on its own would write Opus into the entry a
+                    // higher-ranked source is about to fill.
+                    //
+                    // What it treated as impossible was knowing the answer in
+                    // advance. A quick source can be asked *here* — see
+                    // [SourceResolver.prefetchSubstitute] — and once its stream is
+                    // recorded in [StreamChoice], the question stops being open:
+                    // every later resolve for this track, read-ahead's own included,
+                    // is held to that one stream. Both writers then agree on the
+                    // file and on the `#alt` key it lands under, which is exactly
+                    // the condition the byte half was missing.
+                    //
+                    // A source that is disabled, doesn't have the track, or fails
+                    // leaves nothing pinned, and this falls through to the same
+                    // URL-only warm-up it did before — YouTube resolves the track at
+                    // playback time as usual.
+                    // Not over an entry YouTube's own bytes already fill, from an
+                    // earlier play: the player reads that head straight off disk,
+                    // and the pin would then stream the substitute after it. That
+                    // track's way up is the second look — see [heldByYouTube].
+                    val youTubeFilled = heldByYouTube(cacheKeyOf(Uri.parse("bitchord://watch?v=$next")))
+                    val warmed = if (substitutable && target != null && !pinnedToYouTube && !youTubeFilled) {
+                        runCatching { SourceResolver.prefetchSubstitute(target) }
+                            .onFailure { TrackLog.d(TAG, "warm-up substitute failed for $next: ${it.message}", about = next) }
+                            .getOrNull()
+                            ?.also { StreamChoice.remember(next, it, substituted = true) }
+                    } else {
+                        null
+                    }
+                    // Safe to fill for the same reason in both cases: either nothing
+                    // outranks YouTube and read-ahead is the only writer, or a
+                    // source has been pinned and every writer now resolves to it.
+                    val cacheBytes = (!substitutable || warmed != null) && !pinnedToYouTube
+                    if (cacheBytes) {
+                        launch(TrackLog.about(next)) {
+                            delay(PREFETCH_DELAY_MS)
+                            fetch(next, 0, PRELOAD_BYTES)
+                            fetchWhole(next)
+                        }
+                    }
+                    launch {
+                        delay(PREFETCH_DELAY_MS)
+                        for (id in videoIds.take(QUEUE_LOOKAHEAD + 1).let { if (cacheBytes) it.drop(1) else it }) {
+                            // A track already pinned to another source has no use
+                            // for a YouTube URL: nothing will ask for one, and
+                            // minting it spends a client walk to fill a cache entry
+                            // that is never read.
+                            if (id == next && warmed != null) continue
+                            runCatching { StreamResolver.resolve(id) }
+                                .onFailure { TrackLog.d(TAG, "queue warm-up skipped $id: ${it.message}", about = id) }
+                            delay(QUEUE_RESOLVE_STAGGER_MS)
+                        }
                     }
                 }
             }
         }
+    }
+
+    /**
+     * Warms one source-backed row by running the resolve playback will run.
+     *
+     * For a source that downloads before it plays — Mornye — this *is* the
+     * download: its `stream()` fetches the file and hands back a `file://`
+     * URL, and the next open of the same row finds that file on disk and
+     * returns it without a request. Left until the row is reached, the whole
+     * download would sit in the gap between tracks.
+     *
+     * A URL-based source only has its stream URL minted here, which is cheap
+     * and is what the player's own open would otherwise do at the transition.
+     *
+     * Nothing is pinned and no mix is chosen: a row played from the queue is
+     * resolved by [SourceResolver] on every open, with the row's own mix
+     * parameter. This is best-effort, and a failure is left to playback to
+     * report rather than logged as if it were final.
+     */
+    private suspend fun warmSource(row: Upcoming) {
+        val (configId, trackId) = SourceRegistry.parseTrackKey(row.mediaId) ?: return
+        if (SourceRegistry.activeForPlayback().none { it.configId == configId }) return
+        val startedAt = SystemClock.elapsedRealtime()
+        runCatching { SourceResolver.resolve(configId, trackId, row.target) }
+            .onSuccess { stream ->
+                TrackLog.d(
+                    TAG,
+                    "source warm-up ready in ${SystemClock.elapsedRealtime() - startedAt}ms: " +
+                        (stream?.format?.summary ?: "nothing found"),
+                    about = row.mediaId,
+                )
+            }
+            .onFailure {
+                if (it is kotlinx.coroutines.CancellationException) throw it
+                TrackLog.d(
+                    TAG,
+                    "source warm-up skipped ${row.mediaId}: ${it.message}",
+                    about = row.mediaId,
+                )
+            }
     }
 
     private var directJob: Job? = null
@@ -1496,10 +1593,16 @@ object AudioCache {
     fun prefetchDirect(upcoming: Upcoming) {
         directJob?.cancel()
         val id = upcoming.mediaId
-        // A source-backed row resolves through its own source when opened, and
-        // a downloaded or reverted track never reads this entry at all.
-        if (SourceRegistry.parseTrackKey(id) != null || id in Downloads.saved.value || OriginalVersion.isPinned(id)) {
+        // A downloaded or reverted track never reads the entry below at all.
+        if (id in Downloads.saved.value || OriginalVersion.isPinned(id)) {
             directJob = null
+            return
+        }
+        // A source-backed row is warmed by the resolve playback will run, not
+        // by the addon-then-YouTube ladder below, which speaks only for
+        // YouTube ids. See [warmSource].
+        if (SourceRegistry.parseTrackKey(id) != null) {
+            directJob = scope.launch(TrackLog.about(id)) { warmSource(upcoming) }
             return
         }
         directJob = scope.launch(TrackLog.about(id)) {

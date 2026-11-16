@@ -3,6 +3,7 @@ package com.music.bitchord.data.sources.mornye
 import kotlinx.serialization.Serializable
 import org.json.JSONArray
 import org.json.JSONObject
+import java.util.Locale
 
 @Serializable
 data class InstalledMorneyePackage(
@@ -25,7 +26,17 @@ data class MorneyeCapabilities(
     val accessKind: String?,
 )
 
-data class MorneyeQualityOption(val id: String, val label: String)
+data class MorneyeQualityOption(
+    val id: String,
+    val label: String,
+    /** What the manifest says this tier actually is; null when it says nothing. */
+    val codec: String? = null,
+    val kbps: Int? = null,
+    val sampleRateHz: Int? = null,
+    val bitDepth: Int? = null,
+    /** True only when the manifest says so, or names a lossless codec. */
+    val isLossless: Boolean = false,
+)
 
 data class MorneyeTrack(
     val id: String,
@@ -67,12 +78,21 @@ data class MorneyeDownloadResult(
     val filePath: String?,
     val format: String?,
     val errorMessage: String?,
+    /** What the addon says it actually wrote, when it says more than an extension. */
+    val codec: String? = null,
+    val kbps: Int? = null,
+    val sampleRateHz: Int? = null,
+    val bitDepth: Int? = null,
+    /** The tier the addon reports having delivered, e.g. `lossless` or `high`. */
+    val quality: String? = null,
 )
 
 private val LOSSLESS_TOKENS = setOf(
     "flac", "alac", "wav", "aiff", "aif", "pcm",
     "lossless", "hi-res", "hires", "hi_res",
-    "flac-24", "flac-16", "96khz", "192khz", "24-bit", "16-bit flac",
+    // A bare `24-bit` or `96 kHz` is a *resolution*, not a statement that the
+    // codec is bit-exact: a 96 kHz Opus stream is still Opus. Those labels are
+    // left to the codec, which the bytes settle. See [buildStream].
 )
 private val ATMOS_TOKENS = setOf("atmos", "dolby", "eac3", "ec-3", "ec3", "joc")
 
@@ -174,7 +194,35 @@ internal fun parseMorneyeDownloadResult(result: Any?): MorneyeDownloadResult {
         ?: result.optString("actual_extension", "").ifBlank { null })
     val error    = result.optString("error_message", "").ifBlank { null }
         ?: result.optString("error", "").ifBlank { null }
-    return MorneyeDownloadResult(success, filePath, format, error)
+    val quality = (result.optString("quality", "").ifBlank { null }
+        ?: result.optString("actual_quality", "").ifBlank { null }
+        ?: result.optString("audio_quality", "").ifBlank { null })
+    // Addons report what they wrote under several names. Take the first that
+    // parses rather than preferring one spelling: a catalogue that says
+    // `bit_depth` and one that says `bitDepth` mean the same thing.
+    val kbps = sequenceOf("kbps", "bitrate", "bit_rate", "bitrate_kbps")
+        .mapNotNull { key -> result.opt(key)?.let(::kbpsOf) }
+        .firstOrNull()
+    val sampleRate = sequenceOf("sample_rate", "sampleRate", "sample_rate_hz", "sampling_rate")
+        .mapNotNull { key -> result.opt(key)?.let(::sampleRateOf) }
+        .firstOrNull()
+    val bitDepth = sequenceOf("bit_depth", "bitDepth", "bits_per_sample", "bitsPerSample")
+        .mapNotNull { key -> result.opt(key)?.let(::bitDepthOf) }
+        .firstOrNull()
+    val codec = (result.optString("codec", "").ifBlank { null }
+        ?: result.optString("audio_codec", "").ifBlank { null })
+        ?.lowercase()?.let(::normaliseCodec)
+    return MorneyeDownloadResult(
+        success = success,
+        filePath = filePath,
+        format = format,
+        errorMessage = error,
+        codec = codec,
+        kbps = kbps,
+        sampleRateHz = sampleRate,
+        bitDepth = bitDepth,
+        quality = quality,
+    )
 }
 
 internal fun capabilitiesOf(manifest: Map<String, Any?>): MorneyeCapabilities {
@@ -186,8 +234,139 @@ internal fun capabilitiesOf(manifest: Map<String, Any?>): MorneyeCapabilities {
     val qualities = qualityRaw.filterIsInstance<Map<*, *>>().mapNotNull { q ->
         val id    = q["id"]?.toString() ?: return@mapNotNull null
         val label = q["label"]?.toString() ?: id
-        MorneyeQualityOption(id, label)
+        val codec = (q["codec"] ?: q["format"] ?: q["fileType"])?.toString()
+            ?.lowercase()?.let(::normaliseCodec)
+        val declaredLossless = q["lossless"] as? Boolean
+            ?: (q["isLossless"] as? Boolean)
+            ?: (q["is_lossless"] as? Boolean)
+        val kbps = sequenceOf("kbps", "bitrate", "bit_rate", "bitrate_kbps")
+            .mapNotNull { key -> q[key]?.let(::kbpsOf) }
+            .firstOrNull() ?: kbpsFromLabel(label)
+        val sampleRate = sequenceOf("sample_rate", "sampleRate", "sample_rate_hz", "sampling_rate")
+            .mapNotNull { key -> q[key]?.let(::sampleRateOf) }
+            .firstOrNull() ?: sampleRateFromLabel(label)
+        val bitDepth = sequenceOf("bit_depth", "bitDepth", "bits_per_sample", "bitsPerSample")
+            .mapNotNull { key -> q[key]?.let(::bitDepthOf) }
+            .firstOrNull() ?: bitDepthFromLabel(label)
+        MorneyeQualityOption(
+            id = id,
+            label = label,
+            codec = codec,
+            kbps = kbps,
+            sampleRateHz = sampleRate,
+            bitDepth = bitDepth,
+            isLossless = declaredLossless ?: isLosslessClaim(codec, label),
+        )
     }
     val access = (manifest["access"] as? Map<*, *>)?.get("kind")?.toString()
     return MorneyeCapabilities(searches, searches, qualities, access)
+}
+
+// ── Quality metadata ────────────────────────────────────────────────────────
+
+private val LOSSLESS_CODECS = setOf("flac", "alac", "wav", "aiff", "aif", "ape", "wv", "dsf", "dff", "pcm")
+private val ATMOS_CODECS = setOf("eac3-joc", "ec3-joc", "dolby-atmos", "eac3")
+
+/** The names catalogues use for a codec, folded onto the ones [StreamFormat] knows. */
+internal fun normaliseCodec(raw: String): String = when (raw.trim().lowercase().removePrefix(".")) {
+    "flac"                    -> "flac"
+    "alac", "apple lossless"  -> "alac"
+    "wav", "wave", "pcm"      -> "wav"
+    "aiff", "aif"             -> "aiff"
+    "mp3", "mpeg", "mpeg-1"   -> "mp3"
+    "aac", "m4a", "mp4a"      -> "aac"
+    "opus"                    -> "opus"
+    "vorbis", "ogg"           -> "vorbis"
+    "eac3", "ec-3", "ec3"     -> "eac3"
+    "eac3-joc", "ec3-joc", "joc", "atmos", "dolby atmos" -> "eac3-joc"
+    else                      -> raw.trim().lowercase().removePrefix(".")
+}
+
+/** Whether [codec] names a bit-exact format. */
+internal fun isLosslessCodec(codec: String?): Boolean = codec != null && codec in LOSSLESS_CODECS
+
+/** Whether a label or codec *claims* lossless. A claim is all this can be. */
+internal fun isLosslessClaim(codec: String?, label: String?): Boolean {
+    if (isLosslessCodec(codec)) return true
+    val l = label?.lowercase().orEmpty()
+    return LOSSLESS_TOKENS.any { it in l }
+}
+
+internal fun isAtmosClaim(codec: String?, label: String?): Boolean {
+    if (codec != null && codec in ATMOS_CODECS) return true
+    val l = label?.lowercase().orEmpty()
+    return ATMOS_TOKENS.any { it in l }
+}
+
+/** `320kbps`, `320 kbps`, `320` → 320. Null when the text carries no number. */
+internal fun kbpsOf(value: Any?): Int? = when (value) {
+    is Number -> value.toInt().takeIf { it in 8..10_000 }
+    is String -> {
+        val m = Regex("(\\d{2,5})\\s*(?:kbps|kb/s|kbit|k)?", RegexOption.IGNORE_CASE)
+            .find(value)
+        m?.groupValues?.get(1)?.toIntOrNull()?.takeIf { it in 8..10_000 }
+    }
+    else -> null
+}
+
+/**
+ * `44100`, `44.1 kHz`, `44.1` → 44100.
+ *
+ * A bare number below 400 is read as kilohertz, because no real audio sample
+ * rate is 44 Hz and every catalogue that writes `24/96` means thousands.
+ */
+internal fun sampleRateOf(value: Any?): Int? {
+    val number = when (value) {
+        is Number -> value.toDouble()
+        is String -> Regex("(\\d+(?:\\.\\d+)?)").find(value)?.groupValues?.get(1)?.toDoubleOrNull()
+        else -> null
+    } ?: return null
+    val hz = if (number in 1.0..400.0) number * 1000.0 else number
+    return hz.toInt().takeIf { it in 8_000..768_000 }
+}
+
+/** `24`, `24-bit`, `bitDepth: 24` → 24. */
+internal fun bitDepthOf(value: Any?): Int? = when (value) {
+    is Number -> value.toInt().takeIf { it in 8..64 }
+    is String -> Regex("(\\d{1,2})").find(value)?.groupValues?.get(1)?.toIntOrNull()
+        ?.takeIf { it in 8..64 }
+    else -> null
+}
+
+/**
+ * Bitrate from a human label, but only when the label says so.
+ *
+ * A bare scan of every number in `24-bit / 96 kHz FLAC` finds 24 and 96 and
+ * calls them a bitrate and a sample rate in kilohertz, which is the exact kind
+ * of invention this integration must not do. Units decide.
+ */
+internal fun kbpsFromLabel(label: String): Int? {
+    val lower = label.lowercase(Locale.ROOT)
+    if (!Regex("\\d{2,5}\\s*(kbps|kb/s|kbit|kb)").containsMatchIn(lower)) return null
+    return kbpsOf(label)?.takeIf { it >= 32 }
+}
+
+/** Sample rate from a label: `44.1 kHz`, `96khz`, `24/96`, `16/44.1`. */
+internal fun sampleRateFromLabel(label: String): Int? {
+    val lower = label.lowercase(Locale.ROOT)
+    // A kilohertz number is the one immediately before the unit, not the first
+    // number in the label: `24-bit / 96 kHz` has a bit depth in front of it.
+    Regex("(\\d+(?:\\.\\d+)?)\\s*k?hz").find(lower)?.let { m ->
+        val number = m.groupValues[1].toDoubleOrNull() ?: return@let
+        val hz = (if (number in 1.0..400.0) number * 1000.0 else number).toInt()
+        if (hz in 8_000..768_000) return hz
+    }
+    // A slash pair is the conventional "bits/rate" or "rate/bits" shorthand.
+    Regex("(\\d+(?:\\.\\d+)?)\\s*/\\s*(\\d+(?:\\.\\d+)?)").find(lower)?.let { m ->
+        listOfNotNull(m.groupValues[1].toDoubleOrNull(), m.groupValues[2].toDoubleOrNull())
+            .firstOrNull { it in 32.0..768.0 }
+            ?.let { return (it * 1000).toInt() }
+    }
+    return null
+}
+
+/** Bit depth from a label, only when it says "bit". */
+internal fun bitDepthFromLabel(label: String): Int? {
+    if ("bit" !in label.lowercase(Locale.ROOT)) return null
+    return bitDepthOf(label)
 }
