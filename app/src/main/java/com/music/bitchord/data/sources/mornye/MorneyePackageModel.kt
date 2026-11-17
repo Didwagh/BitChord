@@ -149,9 +149,15 @@ internal fun parseMorneyeTrack(map: Map<*, *>): MorneyeTrack? {
     // album: addon may use album_name, album, or nothing
     val album = (map["album_name"] ?: map["album"])?.toString()?.trim() ?: ""
 
+    // A runtime of zero is a catalogue saying nothing, not a zero-second
+    // recording. Amazon's `showSearch` states `duration_ms: 0` on every row, and
+    // carrying that through formatted it as the literal "0:00": a row that then
+    // claims a runtime the matcher can read and must reject. Unknown is the
+    // honest value, and [TrackMatcher][com.music.bitchord.data.sources.TrackMatcher]
+    // already knows how to weigh a row that states no runtime.
     val durationMs = when (val d = map["duration_ms"] ?: map["durationMs"] ?: map["duration"]) {
-        is Number -> d.toInt().let { if (it in 1..7200) it * 1000 else it }
-        is String -> d.toIntOrNull()
+        is Number -> d.toInt().let { if (it <= 0) null else if (it in 1..7200) it * 1000 else it }
+        is String -> d.toIntOrNull()?.takeIf { it > 0 }
         else      -> null
     }
 

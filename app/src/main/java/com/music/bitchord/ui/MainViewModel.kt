@@ -96,7 +96,6 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
-import com.music.bitchord.data.sources.AddonSource
 import com.music.bitchord.data.sources.SourceKind
 import com.music.bitchord.data.sources.SourceRegistry
 import com.music.bitchord.data.sources.SourceResolver
@@ -2171,7 +2170,16 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         // Every enabled addon, including ones the connection's quality setting
         // skips for playback: their rows are still worth seeing, and the
         // search page dims them and says why on a tap — see `isBlocked` there.
-        val addons = SourceRegistry.active().filterIsInstance<AddonSource>()
+        //
+        // Mornye extensions are addons too. They were left out of this list by
+        // an `is AddonSource` check written before they existed, so an installed
+        // extension could only ever be reached by substitution while a YouTube
+        // track played — never searched on its own and never as a queue item
+        // the listener picked. That also hid the one thing that makes an
+        // extension's failure diagnosable: a row tapped here resolves through
+        // [SourceResolver.resolve] straight into the extension's `download`.
+        val addons = SourceRegistry.active()
+            .filter { it.kind == SourceKind.ADDON || it.kind == SourceKind.MORNYE }
         if (addons.isEmpty()) {
             _addonResults.value = UiState.Error(text(R.string.search_addons_none))
             return

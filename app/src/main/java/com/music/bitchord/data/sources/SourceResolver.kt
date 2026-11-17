@@ -44,6 +44,17 @@ object SourceResolver {
     private const val TAG = "BitChord"
 
     /**
+     * The tag the Diagnostics page's "Mornye" filter selects. A refusal that
+     * happens here is about the extension, so it belongs under the extension's
+     * filter rather than under [TAG], where a capture taken for an addon
+     * problem would not show it.
+     */
+    private const val TAG_DIAG = "Mornye"
+
+    /** How many of a no-match source's rows the refusal line spells out. */
+    private const val NO_MATCH_SAMPLES = 5
+
+    /**
      * What to ask a source for, right now, from the connection's ceiling alone
      * — see [AppSettings.effectiveAudioQuality].
      *
@@ -1192,7 +1203,7 @@ object SourceResolver {
                 // it, and the two have opposite fixes.
                 if (otherLength.isNotEmpty()) {
                     TrackLog.d(
-                        TAG,
+                        if (source.kind == SourceKind.MORNYE) TAG_DIAG else TAG,
                         "${source.displayName}: ${otherLength.size} match(es) for '${matchOn.title}' outside " +
                             "±${driftSec}s of ${matchOn.durationSec}s: " +
                             otherLength.joinToString { "'${it.title}' ${it.durationText ?: "?"}" },
@@ -1200,7 +1211,30 @@ object SourceResolver {
                 }
                 matches = sameLength
             }
-            if (matches.isEmpty()) continue
+            if (matches.isEmpty()) {
+                // Extensions are asked by substitution and by the Addons tab, and
+                // a capture filtered to Mornye used to show their searches with
+                // no word on why nothing came of them: this line is the only
+                // place that knows both the request and the rows that lost.
+                // Scored with the same call the ranking made, so a candidate
+                // listed with a number was outranked or length-filtered, and one
+                // listed as `refused` is the matcher's own answer.
+                if (source.kind == SourceKind.MORNYE) {
+                    TrackLog.d(
+                        TAG_DIAG,
+                        "[${source.configId}] ${source.displayName} has no match for " +
+                            "'${target.title}' by '${target.artist}'" +
+                            (target.durationSec?.let { " (${it}s)" } ?: "") +
+                            (target.album?.let { ", album '$it'" } ?: "") +
+                            " among ${candidates.take(NO_MATCH_SAMPLES).joinToString { candidate ->
+                                "'${candidate.title}' by '${candidate.artist}' " +
+                                    "${candidate.durationText ?: "?"} → " +
+                                    (TrackMatcher.score(candidate, matchOn)?.toString() ?: "refused")
+                            }}",
+                    )
+                }
+                continue
+            }
             return streamBest(
                 source,
                 matches,
