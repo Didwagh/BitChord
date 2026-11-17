@@ -127,6 +127,8 @@ internal const val MORNYE_BOOTSTRAP = """
           push(mornyeDecode(eq<0?part:part.slice(0,eq)),mornyeDecode(eq<0?'':part.slice(eq+1)));
         }
       }
+    }else if(init instanceof MornyeURLSearchParams){
+      init.forEach(function(value,name){push(name,value);});
     }else if(init&&typeof init.length==='number'){
       for(var j=0;j<init.length;j++){
         var item=init[j]||[];

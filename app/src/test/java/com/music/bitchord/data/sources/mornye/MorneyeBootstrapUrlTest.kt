@@ -91,6 +91,7 @@ class MorneyeBootstrapUrlTest {
         assertEquals("q=a%20b", eval("new URL('https://x/?q=a b').searchParams.toString()"))
         assertEquals("1", eval("var p = new URLSearchParams('a=1&a=2'); p.get('a')"))
         assertEquals("1,2", eval("var q = new URLSearchParams('a=1&a=2'); q.getAll('a').join(',')"))
+        assertEquals("1,2", eval("var r = new URLSearchParams('a=1&a=2'); var s = new URLSearchParams(r); s.getAll('a').join(',')"))
     }
 
     @Test
