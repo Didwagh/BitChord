@@ -101,6 +101,138 @@ internal const val MORNYE_BOOTSTRAP = """
     clearCookies:function(){return call('http.clearCookies');},
   };
   globalThis.fetch=function(u,o){o=o||{};return request(u,o.method,o.body,o.headers);};
+  // QuickJS ships no DOM globals, so `URL` and `URLSearchParams` are absent.
+  // The reference Mornye host provides them and addons rely on that: Amazon
+  // builds every result deeplink with `new URL(path, base)`, and its
+  // `extractAmazonDeeplinkInfo` swallows the ReferenceError, so a missing
+  // `URL` turns a page full of songs into "Search returned 0 results" with an
+  // HTTP 200 and no error in the log. This covers the standard surface those
+  // addons read: parsing absolute and base-relative URLs, `pathname`,
+  // `hostname`, `host`, `protocol`, `origin`, `href` and `searchParams`.
+  function mornyeDecode(value){
+    var text=String(value==null?'':value).replace(/\+/g,' ');
+    try{return decodeURIComponent(text);}catch(e){return text;}
+  }
+  function MornyeURLSearchParams(init){
+    var pairs=[];
+    function push(name,value){pairs.push([String(name),String(value)]);}
+    if(typeof init==='string'){
+      var body=init.replace(/^\?/,'');
+      if(body){
+        var parts=body.split('&');
+        for(var i=0;i<parts.length;i++){
+          var part=parts[i];
+          if(!part)continue;
+          var eq=part.indexOf('=');
+          push(mornyeDecode(eq<0?part:part.slice(0,eq)),mornyeDecode(eq<0?'':part.slice(eq+1)));
+        }
+      }
+    }else if(init&&typeof init.length==='number'){
+      for(var j=0;j<init.length;j++){
+        var item=init[j]||[];
+        push(item[0],item.length>1?item[1]:'');
+      }
+    }else if(init&&typeof init==='object'){
+      var keys=Object.keys(init);
+      for(var k=0;k<keys.length;k++)push(keys[k],init[keys[k]]);
+    }
+    this.append=function(name,value){push(name,value);};
+    this.delete=function(name){
+      var out=[];
+      for(var i=0;i<pairs.length;i++)if(pairs[i][0]!==String(name))out.push(pairs[i]);
+      pairs=out;
+    };
+    this.get=function(name){
+      for(var i=0;i<pairs.length;i++)if(pairs[i][0]===String(name))return pairs[i][1];
+      return null;
+    };
+    this.getAll=function(name){
+      var out=[];
+      for(var i=0;i<pairs.length;i++)if(pairs[i][0]===String(name))out.push(pairs[i][1]);
+      return out;
+    };
+    this.has=function(name){
+      for(var i=0;i<pairs.length;i++)if(pairs[i][0]===String(name))return true;
+      return false;
+    };
+    this.set=function(name,value){
+      var found=false,out=[];
+      for(var i=0;i<pairs.length;i++){
+        if(pairs[i][0]!==String(name))out.push(pairs[i]);
+        else if(!found){out.push([String(name),String(value)]);found=true;}
+      }
+      if(!found)out.push([String(name),String(value)]);
+      pairs=out;
+    };
+    this.sort=function(){pairs.sort(function(a,b){return a[0]<b[0]?-1:(a[0]>b[0]?1:0);});};
+    this.keys=function(){return pairs.map(function(p){return p[0];});};
+    this.values=function(){return pairs.map(function(p){return p[1];});};
+    this.entries=function(){return pairs.map(function(p){return [p[0],p[1]];});};
+    this.forEach=function(fn,thisArg){
+      for(var i=0;i<pairs.length;i++)fn.call(thisArg,pairs[i][1],pairs[i][0],this);
+    };
+    this.toString=function(){
+      var out=[];
+      for(var i=0;i<pairs.length;i++)out.push(encodeURIComponent(pairs[i][0])+'='+encodeURIComponent(pairs[i][1]));
+      return out.join('&');
+    };
+    if(typeof Symbol!=='undefined'&&Symbol.iterator){
+      this[Symbol.iterator]=function(){return this.entries()[Symbol.iterator]();};
+    }
+  }
+  function MornyeURL(href,base){
+    var raw=String(href==null?'':href);
+    var baseHref=base==null?null:String(base&&base.href?base.href:base);
+    function parse(value){
+      var m=/^([a-zA-Z][a-zA-Z0-9+.\-]*:)\/\/([^\/?#]*)([^?#]*)(\?[^#]*)?(#.*)?/.exec(value);
+      if(!m)return null;
+      var authority=m[2],path=m[3]||'';
+      var at=authority.lastIndexOf('@');
+      var userinfo='',hostport=authority;
+      if(at>=0){userinfo=authority.slice(0,at+1);hostport=authority.slice(at+1);}
+      var hostname=hostport,port='';
+      var colon=hostport.lastIndexOf(':');
+      if(colon>=0&&hostport.indexOf(']')<colon){hostname=hostport.slice(0,colon);port=hostport.slice(colon+1);}
+      if(path.charAt(0)!=='/')path='/'+path;
+      return {protocol:m[1],userinfo:userinfo,hostname:hostname,port:port,pathname:path,search:m[4]||'',hash:m[5]||''};
+    }
+    function originOf(p){return p.protocol+'//'+p.userinfo+p.hostname+(p.port?':'+p.port:'');}
+    var parsed=parse(raw);
+    if(!parsed&&baseHref!=null){
+      var baseParsed=parse(baseHref);
+      if(baseParsed){
+        if(raw.slice(0,2)==='//')parsed=parse(baseParsed.protocol+raw);
+        else if(raw.charAt(0)==='/')parsed=parse(originOf(baseParsed)+raw);
+        else{
+          var dir=baseParsed.pathname.slice(0,baseParsed.pathname.lastIndexOf('/')+1)||'/';
+          parsed=parse(originOf(baseParsed)+dir+raw);
+        }
+      }
+    }
+    if(!parsed)throw new TypeError('Invalid URL: '+raw);
+    this.protocol=parsed.protocol;
+    this.username='';
+    this.password='';
+    this.hostname=parsed.hostname;
+    this.port=parsed.port;
+    this.host=parsed.hostname+(parsed.port?':'+parsed.port:'');
+    this.pathname=parsed.pathname;
+    this.search=parsed.search;
+    this.hash=parsed.hash;
+    this.origin=originOf(parsed);
+    this.href=this.origin+this.pathname+this.search+this.hash;
+    this.searchParams=new MornyeURLSearchParams(this.search);
+  }
+  MornyeURL.prototype.toString=function(){return this.href;};
+  MornyeURL.prototype.toJSON=function(){return this.href;};
+  MornyeURL.canParse=function(href,base){
+    try{new MornyeURL(href,base);return true;}catch(e){return false;}
+  };
+  MornyeURL.parse=function(href,base){
+    try{return new MornyeURL(href,base);}catch(e){return null;}
+  };
+  if(typeof globalThis.URLSearchParams!=='function')globalThis.URLSearchParams=MornyeURLSearchParams;
+  if(typeof globalThis.URL!=='function')globalThis.URL=MornyeURL;
   // Signed-session providers (Tidal, Qobuz, Amazon, Deezer) read this global
   // before every request. It exists only when the addon's manifest declares a
   // `signedSession` block; the host owns the keys, the signing and the
