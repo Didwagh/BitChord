@@ -1184,8 +1184,12 @@ class PlaybackService : MediaLibraryService() {
             )
             activeTrackIsDolbyAtmos = NerdStats.isDolbyAtmosMime(format.sampleMimeType)
             applySpatialAudioEnabled()
-            publishNerdStats()
+            // Remember the renderer's own Format before publishing. The live
+            // getter can still be null at this instant, and the next snapshot
+            // would then lose the codec/rate/channels even though the decoder
+            // has just told us exactly what it was handed. See statsFormat().
             currentAudioInputFormat = format
+            publishNerdStats()
             applyOutputRoute()
         }
 
@@ -6010,8 +6014,13 @@ class PlaybackService : MediaLibraryService() {
 
     private fun publishNerdStats() {
         val player = player ?: return
-        val format = player.audioFormat
         val mediaId = player.currentMediaItem?.mediaId
+        val format = statsFormat(
+            live = player.audioFormat,
+            remembered = currentAudioInputFormat,
+            rememberedMediaId = audioFormatFor,
+            mediaId = mediaId,
+        )
         val generation = NerdStats.currentGeneration
         val measured = format?.measure()
         // DSD reaches the renderer already decimated to PCM (DsdExtractor), so
@@ -9903,3 +9912,24 @@ private fun withoutPlatformAlac(selector: MediaCodecSelector) =
  * than on the main thread while a player is built.
  */
 private val ffmpegDecodesAlac by lazy { FfmpegLibrary.supportsFormat(MimeTypes.AUDIO_ALAC) }
+
+/**
+ * The decoder Format to describe in Stats for Nerds.
+ *
+ * `ExoPlayer.getAudioFormat()` is not guaranteed to be populated at the instant
+ * `onAudioInputFormatChanged` fires, and the periodic republish can read it
+ * before a file-backed source's renderer has published its own. The analytics
+ * listener already has the Format the decoder was configured with; the service
+ * keeps it credited to the track it was reported for. Prefer that over a null
+ * live getter, but never over one belonging to a different queue item.
+ */
+internal fun statsFormat(
+    live: Format?,
+    remembered: Format?,
+    rememberedMediaId: String?,
+    mediaId: String?,
+): Format? = if (mediaId != null && rememberedMediaId == mediaId && remembered != null) {
+    remembered
+} else {
+    live
+}
