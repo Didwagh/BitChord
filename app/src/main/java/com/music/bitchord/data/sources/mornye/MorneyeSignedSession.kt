@@ -239,6 +239,19 @@ internal class MorneyeSignedSession(
             val retryMode = contract.optString("retry_mode")
             val retryAfter = retryAfterSeconds(response, contract)
 
+            if (response.status !in 200..299) {
+                // The contract fields explain a failure better than the bare
+                // status the addon sees: origin says who refused, code says
+                // why, retryable says whether waiting can help. None of them
+                // are secret.
+                TrackLog.d(
+                    TAG,
+                    "signed $method ${MorneyeHostBridge.redactedUrl(path)} -> ${response.status} " +
+                        "origin=${origin.ifBlank { "?" }} code=${code.ifBlank { "?" }} " +
+                        "retryable=$retryable retry_after=${retryAfter}s",
+                )
+            }
+
             if (
                 response.status == 503 && origin == "provider" &&
                 code == "PROVIDER_UNAVAILABLE" && retryable &&
@@ -252,6 +265,11 @@ internal class MorneyeSignedSession(
                 // sleep. Uncapped, one dead TIDAL candidate held the queue for
                 // 22–43s before the resolver could try the next source.
                 val delayMs = retryAfter.coerceIn(1L, MAX_PROVIDER_RETRY_WAIT_SECONDS) * 1_000L
+                TrackLog.d(
+                    TAG,
+                    "signed $method ${MorneyeHostBridge.redactedUrl(path)}: provider unavailable; " +
+                        "retry ${providerRetries + 1}/2 in ${delayMs}ms",
+                )
                 runCatching { Thread.sleep(delayMs) }
                 providerRetries++
                 continue

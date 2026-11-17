@@ -35,6 +35,17 @@ internal class MorneyeHostBridge(
     companion object {
         private const val TAG = "BitChord/Mornye"
         private const val MAX_BODY = 32 * 1024 * 1024L
+
+        /**
+         * A URL safe to log: no query, no fragment. Query strings on signed
+         * routes and auth callbacks carry one-use material, and a diagnostics
+         * export must never contain it.
+         */
+        internal fun redactedUrl(raw: String): String {
+            val withoutFragment = raw.substringBefore('#')
+            val withoutQuery = withoutFragment.substringBefore('?')
+            return if (withoutQuery.length <= 180) withoutQuery else withoutQuery.take(177) + "..."
+        }
     }
 
     private val cookieJar = MorneyeCookieJar()
@@ -152,6 +163,7 @@ internal class MorneyeHostBridge(
         val method  = opts.optString("method", "GET").uppercase()
         val bodyStr = opts.optString("body", "")
         val hdrs    = opts.optJSONObject("headers") ?: JSONObject()
+        val startedAt = System.currentTimeMillis()
 
         val builder = Request.Builder().url(url)
         for (k in hdrs.keys()) runCatching { builder.header(k, hdrs.getString(k)) }
@@ -177,6 +189,15 @@ internal class MorneyeHostBridge(
         httpClient.newCall(builder.build()).execute().use { resp ->
             val bytes = resp.body?.byteStream()
                 ?.readBytes()?.take(MAX_BODY.toInt())?.toByteArray() ?: ByteArray(0)
+            // Size and status are the two facts that separate "the provider
+            // answered with an empty page the addon cannot parse" from "the
+            // addon got a real result page". Never the query string or body:
+            // both can carry session material.
+            TrackLog.d(
+                TAG,
+                "http $method ${redactedUrl(url)} -> ${resp.code} ${bytes.size}b " +
+                    "in ${System.currentTimeMillis() - startedAt}ms",
+            )
             return JSONObject().apply {
                 put("ok",     resp.isSuccessful)
                 put("status", resp.code)
