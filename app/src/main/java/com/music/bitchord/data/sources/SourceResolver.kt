@@ -226,7 +226,11 @@ object SourceResolver {
         // what makes "my own FLAC of this, if I have one, else stream it"
         // expressible.
         // A row picked by hand is not up for substitution — see [MIX_PARAM].
-        val picked = pickedMix != null && pinned is AddonSource
+        // Mornye extensions carry the marker too (see pickedMixQuery), so treat
+        // them as picked or a failed download would be replaced by YouTube Opus
+        // under the listener's chosen addon row.
+        val picked = pickedMix != null &&
+            (pinned?.kind == SourceKind.ADDON || pinned?.kind == SourceKind.MORNYE)
         if (!picked && request is StreamRequest.Lossless && pinned?.kind?.canServeLossless != true) {
             for (source in rankedAbove(configId, active)) {
                 if (!source.kind.canServeLossless) continue
@@ -246,8 +250,12 @@ object SourceResolver {
 
         if (pinned != null) {
             attempt(pinned) {
-                if (picked) {
-                    (pinned as AddonSource).stream(trackId, request, stereoOnly = pickedMix == MIX_STEREO)
+                // The stereo-only override belongs to AddonSource alone.
+                // A picked Mornye row is strict about which row it plays, but
+                // it has no second mix to select, so casting it here would
+                // crash the very play the marker is meant to protect.
+                if (picked && pinned is AddonSource) {
+                    pinned.stream(trackId, request, stereoOnly = pickedMix == MIX_STEREO)
                 } else {
                     pinned.stream(trackId, request)
                 }

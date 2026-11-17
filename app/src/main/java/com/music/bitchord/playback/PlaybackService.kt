@@ -1444,6 +1444,20 @@ class PlaybackService : MediaLibraryService() {
                     NerdStats.recordSource(fullMediaId, sourceName)
                 }
                 NerdStats.recordSource(trackParam, sourceName)
+                // Proof that the bytes about to be opened are the extension's
+                // cached copy rather than a substitute. Without this the only
+                // local-file line in a capture is the addon's own "reusing"
+                // message, which cannot say whether the player opened it.
+                if (stream.url.startsWith("file://") &&
+                    configId?.let { SourceRegistry.config(it)?.kind } == SourceKind.MORNYE
+                ) {
+                    TrackLog.d(
+                        "Mornye",
+                        "[$sourceName] serving cached file ${stream.url.substringAfterLast('/')} " +
+                            "for ${dataSpec.uri.getQueryParameter("n")}",
+                        about = fullMediaId,
+                    )
+                }
                 return@Resolver dataSpec.buildUpon()
                     .setUri(Uri.parse(stream.url))
                     .setHttpRequestHeaders(
@@ -1717,11 +1731,19 @@ class PlaybackService : MediaLibraryService() {
         // well would not override that — OkHttpDataSource *appends* the
         // factory's agent after the request's, and the fetch would go out
         // carrying two contradictory User-Agent headers.
+        // ResolvingDataSource hands the resolved DataSpec straight to its
+        // upstream, so the upstream has to understand every scheme a resolver
+        // can return. A Mornye extension downloads before it plays and hands
+        // back a `file://` URI (see MorneyeSource.buildStream): with an
+        // HTTP-only upstream that URI reached OkHttp, which rejects it, and
+        // the cached file never made it to the decoder. DefaultDataSource
+        // dispatches file/content to their own sources and sends HTTP(S)
+        // down to the chunking factory, so streams keep their bounded reads.
+        val resolvedHttpFactory = ChunkedDataSource.Factory(
+            OkHttpDataSource.Factory(Http.client), STREAM_CHUNK_BYTES,
+        )
         val resolvingFactory = ResolvingDataSource.Factory(
-            // Innermost, so it chunks the real googlevideo URL the resolver
-            // above has already substituted in — see [ChunkedDataSource] for
-            // why an open-ended read of one is worth avoiding.
-            ChunkedDataSource.Factory(OkHttpDataSource.Factory(Http.client), STREAM_CHUNK_BYTES),
+            DefaultDataSource.Factory(this, resolvedHttpFactory),
         ) { dataSpec ->
             // Wrapped rather than folded into the resolver above so the record
             // is made in one place for every branch of it, and made from what

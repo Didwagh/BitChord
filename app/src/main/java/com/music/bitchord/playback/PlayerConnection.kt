@@ -638,9 +638,16 @@ private fun Song.matchQuery(): String = buildString {
  * `&mix=` on every addon row, naming the mix its search answer said it is, so
  * its play asks for that row and nothing else — see [SourceResolver.MIX_PARAM].
  * Empty for every other source.
+ *
+ * A Mornye extension is an addon for this purpose too. Without the marker its
+ * rows were not "picked", so a failed download let [SourceResolver.resolve]
+ * quietly fall back to YouTube's Opus — the one copy the listener did not
+ * ask for. The marker also keeps Automix from fetching a YouTube match just
+ * to measure one of these rows.
  */
-private fun Song.pickedMixQuery(configId: String): String {
-    if (SourceRegistry.config(configId)?.kind != SourceKind.ADDON) return ""
+internal fun Song.pickedMixQuery(configId: String): String {
+    val kind = SourceRegistry.config(configId)?.kind
+    if (kind != SourceKind.ADDON && kind != SourceKind.MORNYE) return ""
     return "&${SourceResolver.MIX_PARAM}=${SourceResolver.mixOf(sourceQuality)}"
 }
 
