@@ -95,11 +95,12 @@ internal class MorneyeHostBridge(
         "crypto.random"                 -> handleRandom(args)
         "crypto.sign"                   -> JSONObject().apply { put("value", "") }
         "utils.sleep"                   -> handleSleep(args)
+        "utils.hmacSHA1"                -> handleUtilsHmacSha1(args)
         "session.status"                -> handleSessionStatus()
         "session.clear"                 -> handleSessionClear()
         "session.completeGrant"         -> handleSessionCompleteGrant(args)
         "session.signedFetch"           -> handleSessionSignedFetch(args)
-        "log"                           -> { TrackLog.d(TAG, "[addon] ${args.optString(0)}"); null }
+        "log"                           -> logAddon(args)
         else                            -> { TrackLog.d(TAG, "bridge: unhandled $method"); null }
     }
 
@@ -477,6 +478,19 @@ internal class MorneyeHostBridge(
         return JSONObject().apply { put("__bytes", JSONArray(result.map { it.toInt() and 0xFF })) }
     }
 
+    /**
+     * `utils.hmacSHA1(key, data)` — key first, unlike `crypto.hmac(data, key)`.
+     *
+     * Kept as its own bridge entry so the JS side has nowhere to swap them:
+     * the prelude passes the addon's two arguments through unchanged.
+     */
+    private fun handleUtilsHmacSha1(args: JSONArray): JSONObject {
+        val key    = unpackBytes(args.opt(0))
+        val data   = unpackBytes(args.opt(1))
+        val result = hmacSha1(key, data)
+        return JSONObject().apply { put("__bytes", JSONArray(result.map { it.toInt() and 0xFF })) }
+    }
+
     private fun handleHash(args: JSONArray): JSONObject {
         val data = unpackBytes(args.opt(0))
         val alg  = args.optString(1, "SHA-256")
@@ -503,6 +517,31 @@ internal class MorneyeHostBridge(
         val ms = args.optDouble(0, 0.0).toLong().coerceIn(0L, 30_000L)
         if (ms > 0) runCatching { Thread.sleep(ms) }
         return true
+    }
+
+    /**
+     * `log.info("Search returned", 0, "results")` — every argument, not just
+     * the first.
+     *
+     * Addons pass their detail as extra arguments, and keeping only the first
+     * turned "Search returned 0 results" into "Search returned", which is
+     * exactly the line a diagnostics export needs. Values are stringified the
+     * same way `console.log` would, then redacted.
+     */
+    private fun logAddon(args: JSONArray): Any? {
+        if (args.length() == 0) return null
+        val parts = (0 until args.length()).mapNotNull { i ->
+            when (val value = args.opt(i)) {
+                null, JSONObject.NULL -> null
+                is String -> value
+                is JSONObject, is JSONArray -> value.toString()
+                else -> value.toString()
+            }
+        }
+        if (parts.isNotEmpty()) {
+            TrackLog.d(TAG, "[addon] ${redactAddonLog(parts.joinToString(" "))}")
+        }
+        return null
     }
 
     // ── Path helpers ──────────────────────────────────────────────────────

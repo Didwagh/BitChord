@@ -57,6 +57,13 @@ internal class MorneyeSignedSession(
         private const val DEFAULT_CALLBACK = "mornye://session-grant"
         private const val VERIFICATION_TIMEOUT_MS = 180_000L
         private const val REFRESH_WINDOW_SECONDS = 3_600L
+
+        /**
+         * How long a provider-unavailable retry may sleep. The gateway is
+         * allowed to ask for much more; playback cannot wait it out, and the
+         * answer for a down provider does not change because we waited longer.
+         */
+        private const val MAX_PROVIDER_RETRY_WAIT_SECONDS = 5L
         private val EMPTY_JSON = "application/json".toMediaType()
 
         private val ISO_MILLIS: DateTimeFormatter =
@@ -238,7 +245,13 @@ internal class MorneyeSignedSession(
                 (retryMode.isEmpty() || retryMode == "same_operation") &&
                 providerRetries < 2
             ) {
-                val delayMs = retryAfter.coerceIn(1L, 120L) * 1_000L
+                // The contract allows two same-operation retries, but the
+                // gateway's Retry-After can be tens of seconds. Playback is
+                // waiting on this call, and a provider that is down answers
+                // the same way after a short pause: honour the retry, cap the
+                // sleep. Uncapped, one dead TIDAL candidate held the queue for
+                // 22–43s before the resolver could try the next source.
+                val delayMs = retryAfter.coerceIn(1L, MAX_PROVIDER_RETRY_WAIT_SECONDS) * 1_000L
                 runCatching { Thread.sleep(delayMs) }
                 providerRetries++
                 continue

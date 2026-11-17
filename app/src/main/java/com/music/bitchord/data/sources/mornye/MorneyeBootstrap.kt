@@ -209,7 +209,10 @@ internal const val MORNYE_BOOTSTRAP = """
       getResolutionRemainingMs:function(){return 120000;},
       sha256:function(value){return hex(call('crypto.hash',[bytesOf(value),'SHA-256']));},
       md5:function(value){return hex(call('crypto.hash',[bytesOf(value),'MD5']));},
-      hmacSHA1:function(key,data){return call('crypto.hmac',[bytesOf(key),bytesOf(data),'SHA-1']);},
+      // key first, message second — see MorneyeCrypto.hmacSha1. Passing these
+      // through crypto.hmac() reversed them, which made Spotify's TOTP wrong
+      // and the token endpoint answer HTTP 400.
+      hmacSHA1:function(key,data){return call('utils.hmacSHA1',[bytesOf(key),bytesOf(data)]);},
       base64Decode:function(value){return utf8Text(base64Bytes(String(value==null?'':value)));},
     };
   })();

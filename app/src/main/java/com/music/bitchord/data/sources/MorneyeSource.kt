@@ -4,6 +4,7 @@ import com.music.bitchord.data.TrackLog
 import com.music.bitchord.data.model.Song
 import com.music.bitchord.data.sources.mornye.MorneyeAddonException
 import com.music.bitchord.data.sources.mornye.MorneyeDownloadResult
+import com.music.bitchord.data.sources.mornye.MorneyeFailureCooldown
 import com.music.bitchord.data.sources.mornye.MorneyePackageManager
 import com.music.bitchord.data.sources.mornye.MorneyeQualityOption
 import com.music.bitchord.data.sources.mornye.MorneyeRuntime
@@ -206,6 +207,7 @@ class MorneyeSource(
             // two tiers sharing one name is exactly how a "FLAC" row ends up
             // playing a 128kbps transcode.
             val fileBase = "${sanitise(rawTrackId)}_${sanitise(quality?.id ?: "default")}"
+            val failKey = MorneyeFailureCooldown.key(addonKey, rawTrackId, quality?.id)
 
             val addonCacheDir = File(MorneyePackageManager.downloadCacheDir, addonKey)
                 .also { it.mkdirs() }
@@ -221,7 +223,18 @@ class MorneyeSource(
                         TAG,
                         "[$addonKey] reusing ${file.name} (${file.length()} bytes) for $rawTrackId",
                     )
+                    MorneyeFailureCooldown.clear(failKey)
                     return@withContext buildStream(file, quality, request, parsed = null)
+                }
+
+                if (MorneyeFailureCooldown.isCoolingDown(failKey)) {
+                    TrackLog.d(
+                        TAG,
+                        "[$addonKey] skipping $rawTrackId (${quality?.id ?: "default"}): " +
+                            "it failed less than ${MorneyeFailureCooldown.WINDOW_MS / 1000}s ago; " +
+                            "letting another source answer",
+                    )
+                    return@withContext null
                 }
 
                 // The addon may rename the extension (e.g. .flac → .m4a for
@@ -234,6 +247,11 @@ class MorneyeSource(
                         " (${quality?.label ?: "addon default"}) → $outputPath",
                 )
 
+                // The addon's own retries and the signed-session contract's
+                // provider retries both happen inside this call, so its elapsed
+                // time is the honest answer to "why did one candidate take
+                // 40s?".
+                val startedAt = System.currentTimeMillis()
                 val downloadResult = runCatching {
                     rt.invoke(
                         "download",
@@ -243,7 +261,13 @@ class MorneyeSource(
                 }.onFailure {
                     if (it is MorneyeAddonException) TrackLog.d(TAG, "[$addonKey] addon: ${it.message}")
                     else TrackLog.w(TAG, "[$addonKey] download failed: ${it.message}")
-                }.getOrNull() ?: return@withContext null
+                }.getOrNull()
+                val elapsedMs = System.currentTimeMillis() - startedAt
+                if (downloadResult == null) {
+                    MorneyeFailureCooldown.record(failKey)
+                    TrackLog.w(TAG, "[$addonKey] download for $rawTrackId returned nothing after ${elapsedMs}ms")
+                    return@withContext null
+                }
 
                 val parsed = parseMorneyeDownloadResult(downloadResult as? JSONObject
                     ?: run {
@@ -254,18 +278,25 @@ class MorneyeSource(
                     } ?: return@withContext null)
 
                 if (!parsed.success) {
-                    TrackLog.w(TAG, "[$addonKey] download() returned success=false: ${parsed.errorMessage}")
+                    MorneyeFailureCooldown.record(failKey)
+                    TrackLog.w(
+                        TAG,
+                        "[$addonKey] download() returned success=false after ${elapsedMs}ms: " +
+                            "${parsed.errorMessage}",
+                    )
                     return@withContext null
                 }
 
                 val filePath = parsed.filePath
                 if (filePath.isNullOrBlank()) {
+                    MorneyeFailureCooldown.record(failKey)
                     TrackLog.w(TAG, "[$addonKey] download() success but no file_path")
                     return@withContext null
                 }
 
                 val file = File(filePath)
                 if (!file.exists() || file.length() == 0L) {
+                    MorneyeFailureCooldown.record(failKey)
                     TrackLog.w(TAG, "[$addonKey] file_path does not exist or is empty: $filePath")
                     return@withContext null
                 }
@@ -279,9 +310,10 @@ class MorneyeSource(
                         "[$addonKey] addon said $codecHint for $rawTrackId; bytes are $detected",
                     )
                 }
+                MorneyeFailureCooldown.clear(failKey)
                 TrackLog.d(
                     TAG,
-                    "[$addonKey] cached $rawTrackId at $filePath — ${file.length()} bytes, " +
+                    "[$addonKey] cached $rawTrackId at $filePath in ${elapsedMs}ms — ${file.length()} bytes, " +
                         "codec=${detected ?: codecHint ?: guessCodecFromPath(filePath) ?: "unknown"}",
                 )
                 return@withContext buildStream(file, quality, request, parsed)

@@ -39,7 +39,26 @@ object MorneyePackageManager {
     private const val TAG = "BitChord/Mornye"
     private const val REGISTRY_URL =
         "https://raw.githubusercontent.com/mornyeapp/Mornye-Extension/refs/heads/main/registry.json"
-    private const val COMPAT_VERSION = "5.1.0"
+    private const val COMPAT_VERSION = "5.3.0"
+
+    /**
+     * Runtime features this host actually implements. An addon that asks for
+     * one of the others is still installed — refusing it would hide a working
+     * download provider behind one optional nicety — but the gap is logged
+     * instead of being discovered later as a silent failure.
+     *
+     * Deliberately absent: `preparedContext@1` (the host passes no pre-resolved
+     * metadata into download(), so addons fetch it themselves) and
+     * `deferredPreview@1` (search rows carry no playable sample URL). Both are
+     * optional in the addons that declare them; Qobuz falls back to a metadata
+     * fetch and to no preview respectively.
+     */
+    private val KNOWN_RUNTIME_FEATURES = setOf(
+        "signedSession@1", "signedSession@2", "signedSession@3",
+        "sessionGrant@1",
+        "downloadSegments@1",
+        "patternedFileTransform@1",
+    )
     private const val PREFS_KEY = "mornye_packages"
     private const val PREFS_REGISTRY = "mornye_registry"
 
@@ -456,6 +475,20 @@ object MorneyePackageManager {
             throw MorneyeInstallException(
                 "Addon requires Mornye runtime $minApp (BitChord supports $COMPAT_VERSION)"
             )
+        val declared = manifest.optJSONArray("requiredRuntimeFeatures")
+        if (declared != null) {
+            val unsupported = (0 until declared.length())
+                .map { declared.optString(it) }
+                .filter { it.isNotBlank() && it !in KNOWN_RUNTIME_FEATURES }
+            if (unsupported.isNotEmpty()) {
+                TrackLog.w(
+                    TAG,
+                    "Addon '$name' declares runtime features this host does not implement: " +
+                        "${unsupported.joinToString()}; installing anyway — features that " +
+                        "need them may be skipped or fall back",
+                )
+            }
+        }
     }
 
     private fun loadPersistedPackages(): List<InstalledMorneyePackage> {

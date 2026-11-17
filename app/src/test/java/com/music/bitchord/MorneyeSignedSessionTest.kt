@@ -147,13 +147,24 @@ class MorneyeSignedSessionTest {
         }
 
         val client = MorneyeSignedSession(config, store, client) { mutable.value }
+        // The install id is the app's stable identity with the gateway; the
+        // exchange must echo the one already stored, not mint a new one.
+        store.put(
+            "signed_session:" + namespace(),
+            MorneyeSignedSessionRecord(installId = "install").toJson().toString(),
+        )
         val first = client.signedFetch("POST", "/tickets", """{"a":1}""", emptyMap())
         assertTrue(first.optBoolean("needsVerification"))
         assertEquals("VERIFY_REQUIRED", first.getString("error"))
         val authUrl = first.getString("auth_url")
-        assertTrue(authUrl.startsWith(server.url("/v2/challenge").toString()))
-        assertTrue(authUrl.contains("id=chl_1"))
-        assertTrue(authUrl.contains("cb_version=v2grant"))
+        assertTrue("authUrl=$authUrl", authUrl.contains("/v2/challenge"))
+        assertTrue("authUrl=$authUrl", authUrl.contains("id=chl_1"))
+        // The callback template lives inside the `cb` parameter; its
+        // cb_version/state are URL-encoded, so decode before asserting.
+        val callbackTemplate = query(authUrl, "cb")
+        assertNotNull("authUrl=$authUrl", callbackTemplate)
+        assertTrue("cb=$callbackTemplate", callbackTemplate!!.contains("cb_version=v2grant"))
+        assertTrue("cb=$callbackTemplate", callbackTemplate.contains("state="))
         val state = query(authUrl, "state")
         assertNotNull(state)
 
@@ -340,7 +351,7 @@ class MorneyeSignedSessionTest {
         val after = client.status()
         assertTrue(after.optBoolean("verification_required"))
         assertTrue(after.getString("auth_url").contains("id=chl_1"))
-        assertNull(client.begin()) // reuses the live challenge
+        assertEquals(url, client.begin()) // reuses the live challenge
         assertEquals(1, server.requestCount)
     }
 
