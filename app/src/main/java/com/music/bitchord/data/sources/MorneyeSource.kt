@@ -10,6 +10,7 @@ import com.music.bitchord.data.sources.mornye.MorneyeQualityOption
 import com.music.bitchord.data.sources.mornye.MorneyeRuntime
 import com.music.bitchord.data.sources.mornye.isAtmosClaim
 import com.music.bitchord.data.sources.mornye.isLosslessCodec
+import com.music.bitchord.data.sources.mornye.isMorneyeTrackItem
 import com.music.bitchord.data.sources.mornye.normaliseCodec
 import com.music.bitchord.data.sources.mornye.parseMorneyeDownloadResult
 import com.music.bitchord.data.sources.mornye.parseMorneyeTrack
@@ -153,6 +154,7 @@ class MorneyeSource(
                 else          -> return@mapNotNull null
             }
             val track = parseMorneyeTrack(map) ?: return@mapNotNull null
+            if (!isMorneyeTrackItem(map)) return@mapNotNull null
             Song(
                 videoId       = SourceRegistry.trackKey(config.id, track.id),
                 title         = track.title,
@@ -170,6 +172,9 @@ class MorneyeSource(
                 sourceHiRes = track.isLossless && !track.isAtmos,
             )
         }
+            // Amazon's feed repeats a track in several shelves; one row per
+            // track is what the list and the queue expect.
+            .distinctBy { it.videoId }
         TrackLog.d(TAG, "[$addonKey] search '$query' → ${songs.size} rows")
         songs
     }

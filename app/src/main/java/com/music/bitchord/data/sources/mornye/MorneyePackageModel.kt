@@ -105,6 +105,23 @@ private val ATMOS_TOKENS = setOf("atmos", "dolby", "eac3", "ec-3", "ec3", "joc")
  * - TIDAL:     name, artists (string/array), album_name, duration_ms, cover_url / artwork
  * - Generic:   title, artist, album, thumbnail, artworkUrl, artwork
  */
+/**
+ * Whether a search row is a track rather than an album, artist or playlist hit.
+ *
+ * Two shapes exist in the addon ecosystem:
+ *  - track-only arrays (Tidal, Deezer, JioSaavn) carry no `item_type`, and every
+ *    row is a track;
+ *  - mixed feeds (Spotify, Amazon) tag each row `item_type: "track" | "album" |
+ *    "artist" | "playlist"`.
+ *
+ * Treating the second shape as track-only offered albums and artists as
+ * playable songs; a row without the field is still kept for the first shape.
+ */
+internal fun isMorneyeTrackItem(map: Map<*, *>): Boolean {
+    val type = map["item_type"]?.toString()?.trim()?.lowercase() ?: return true
+    return type.isEmpty() || type == "track"
+}
+
 internal fun parseMorneyeTrack(map: Map<*, *>): MorneyeTrack? {
     val id = map["id"]?.toString()?.trim() ?: return null
     val title = (map["name"] ?: map["title"])?.toString()?.trim() ?: return null
