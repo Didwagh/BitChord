@@ -11,6 +11,7 @@ import androidx.media3.exoplayer.drm.DrmSessionEventListener
 import androidx.media3.exoplayer.drm.DrmSessionManager
 import androidx.media3.exoplayer.drm.DrmSessionManagerProvider
 import android.os.Looper
+import com.music.bitchord.data.sources.mornye.MorneyePackageManager
 
 /**
  * A DRM session manager for items that were never configured for DRM.
@@ -52,7 +53,20 @@ fun clearAwareDrmSessionManagerProvider(): DrmSessionManagerProvider {
         if (item.localConfiguration?.drmConfiguration != null) {
             configured.get(item)
         } else {
-            ClearDrmSessionManager
+            // An addon may have handed back CENC-encrypted ISO-BMFF with the
+            // AES key in its download result. Provision that key into a
+            // ClearKey session before the samples reach MediaCodec; without
+            // it ExoPlayer queues encrypted buffers with no crypto object and
+            // dies with `queuing secure buffer without mCrypto or mDescrambler`.
+            val uri = item.localConfiguration?.uri
+            val configId = uri?.getQueryParameter("s")
+            val trackId = uri?.getQueryParameter("t")
+            val key = MorneyePackageManager.decryptionKeyFor(configId, trackId)
+            if (key != null && clearKeySupported()) {
+                ClearKeyDrmSessionManager(key)
+            } else {
+                ClearDrmSessionManager
+            }
         }
     }
 }

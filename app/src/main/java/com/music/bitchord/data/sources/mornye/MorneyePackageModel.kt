@@ -85,6 +85,14 @@ data class MorneyeDownloadResult(
     val bitDepth: Int? = null,
     /** The tier the addon reports having delivered, e.g. `lossless` or `high`. */
     val quality: String? = null,
+    /**
+     * AES key returned by providers that hand back CENC-encrypted ISO-BMFF.
+     * Amazon reports it in `decryption.key` / `decryption_key`. Lokal and the
+     * reference Mornye app feed it to ffmpeg's `-decryption_key`; BitChord
+     * provisions it into a ClearKey session instead. Never log this value.
+     */
+    val decryptionKey: String? = null,
+    val decryptionStrategy: String? = null,
 )
 
 private val LOSSLESS_TOKENS = setOf(
@@ -235,6 +243,13 @@ internal fun parseMorneyeDownloadResult(result: Any?): MorneyeDownloadResult {
     val codec = (result.optString("codec", "").ifBlank { null }
         ?: result.optString("audio_codec", "").ifBlank { null })
         ?.lowercase()?.let(::normaliseCodec)
+    val decryption = result.optJSONObject("decryption")
+    // Amazon's addon returns both forms. The descriptor is authoritative for
+    // the strategy; the flat field is the fallback used by older packages.
+    val decryptionKey = (decryption?.optString("key", "")?.ifBlank { null }
+        ?: result.optString("decryption_key", "").ifBlank { null })
+        ?.trim()?.ifBlank { null }
+    val decryptionStrategy = decryption?.optString("strategy", "")?.ifBlank { null }?.trim()
     return MorneyeDownloadResult(
         success = success,
         filePath = filePath,
@@ -245,6 +260,8 @@ internal fun parseMorneyeDownloadResult(result: Any?): MorneyeDownloadResult {
         sampleRateHz = sampleRate,
         bitDepth = bitDepth,
         quality = quality,
+        decryptionKey = decryptionKey,
+        decryptionStrategy = decryptionStrategy,
     )
 }
 

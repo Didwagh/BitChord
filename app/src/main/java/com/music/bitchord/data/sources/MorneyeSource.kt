@@ -224,12 +224,27 @@ class MorneyeSource(
                 // instead of starting a second download at the moment the
                 // previous track ends.
                 existingFile(addonCacheDir, fileBase)?.let { file ->
-                    TrackLog.d(
-                        TAG,
-                        "[$addonKey] reusing ${file.name} (${file.length()} bytes) for $rawTrackId",
-                    )
-                    MorneyeFailureCooldown.clear(failKey)
-                    return@withContext buildStream(file, quality, request, parsed = null)
+                    // A file cached by an older build may still be CENC-
+                    // encrypted, without the key ever having been saved. It
+                    // cannot be played; fetch it again so the addon hands us
+                    // the key alongside the audio.
+                    if (isCencEncrypted(file) &&
+                        MorneyePackageManager.decryptionKeyFor(configId, rawTrackId) == null
+                    ) {
+                        TrackLog.d(
+                            TAG,
+                            "[$addonKey] cached ${file.name} is encrypted but has no saved key; " +
+                                "discarding and re-downloading",
+                        )
+                        discardPartialDownload(addonCacheDir, fileBase)
+                    } else {
+                        TrackLog.d(
+                            TAG,
+                            "[$addonKey] reusing ${file.name} (${file.length()} bytes) for $rawTrackId",
+                        )
+                        MorneyeFailureCooldown.clear(failKey)
+                        return@withContext buildStream(file, quality, request, parsed = null)
+                    }
                 }
 
                 if (MorneyeFailureCooldown.isCoolingDown(failKey)) {
@@ -322,6 +337,28 @@ class MorneyeSource(
                         TAG,
                         "[$addonKey] addon said $codecHint for $rawTrackId; bytes are $detected",
                     )
+                }
+                // Amazon's addon hands back CENC-encrypted ISO-BMFF plus the
+                // AES key in `decryption`. Lokal runs ffmpeg -decryption_key
+                // here; we keep the key and provision a ClearKey session when
+                // the player opens this file. Never log the key itself.
+                parsed.decryptionKey?.let { key ->
+                    if (parsed.decryptionStrategy.isNullOrBlank() ||
+                        parsed.decryptionStrategy.equals("ffmpeg.mov_key", ignoreCase = true)
+                    ) {
+                        MorneyePackageManager.rememberDecryptionKey(configId, rawTrackId, key)
+                        TrackLog.d(
+                            TAG,
+                            "[$addonKey] $rawTrackId is CENC-encrypted; registered ${key.length}-char " +
+                                "ClearKey material for playback",
+                        )
+                    } else {
+                        TrackLog.w(
+                            TAG,
+                            "[$addonKey] $rawTrackId uses unsupported decryption strategy " +
+                                "${parsed.decryptionStrategy}; playback may fail",
+                        )
+                    }
                 }
                 MorneyeFailureCooldown.clear(failKey)
                 TrackLog.d(
@@ -446,6 +483,41 @@ class MorneyeSource(
         is StreamRequest.Lossless -> "lossless"
         is StreamRequest.Best -> "best available"
         is StreamRequest.Capped -> "≤${maxKbps}kbps"
+    }
+
+    /**
+     * Whether a cached MP4 still carries CENC encryption boxes. Used only to
+     * decide whether an old cache entry needs the key-bearing download again;
+     * a clear file never pays for the scan unless it is being reused.
+     */
+    private fun isCencEncrypted(file: File): Boolean {
+        if (!file.name.contains('.')) return false
+        val ext = file.name.substringAfterLast('.').lowercase(Locale.ROOT)
+        if (ext !in setOf("m4a", "mp4", "m4b")) return false
+        val needles = arrayOf("pssh".toByteArray(), "senc".toByteArray())
+        val buffer = ByteArray(64 * 1024)
+        var tail = ByteArray(0)
+        file.inputStream().use { input ->
+            while (true) {
+                val read = input.read(buffer)
+                if (read <= 0) break
+                val data = if (tail.isEmpty()) buffer.copyOf(read) else tail + buffer.copyOf(read)
+                if (needles.any { containsAscii(data, it) }) return true
+                tail = data.copyOfRange(maxOf(0, data.size - 8), data.size)
+            }
+        }
+        return false
+    }
+
+    private fun containsAscii(data: ByteArray, needle: ByteArray): Boolean {
+        if (needle.isEmpty() || data.size < needle.size) return false
+        outer@ for (i in 0..data.size - needle.size) {
+            for (j in needle.indices) {
+                if (data[i + j] != needle[j]) continue@outer
+            }
+            return true
+        }
+        return false
     }
 
     /** Anything at all already on disk for this track and tier. */

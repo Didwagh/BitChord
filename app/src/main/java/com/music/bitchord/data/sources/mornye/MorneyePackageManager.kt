@@ -61,6 +61,8 @@ object MorneyePackageManager {
     )
     private const val PREFS_KEY = "mornye_packages"
     private const val PREFS_REGISTRY = "mornye_registry"
+    /** Per-track CENC keys, so a cached encrypted file still plays next launch. */
+    private const val PREFS_DECRYPTION_KEY = "mornye_dk_"
 
     private lateinit var context: Context
     private lateinit var prefs: SharedPreferences
@@ -546,6 +548,31 @@ object MorneyePackageManager {
     }
 
     private val Int.sign: Int get() = when { this > 0 -> 1; this < 0 -> -1; else -> 0 }
+
+    // ── CENC decryption keys ────────────────────────────────────────────────
+
+    /**
+     * Remember the key an addon returned for an encrypted download. The key is
+     * stored locally, never logged: the cached audio survives restarts, so the
+     * material needed to play it has to survive too.
+     */
+    fun rememberDecryptionKey(configId: String, trackId: String, key: String) {
+        if (!::prefs.isInitialized || configId.isBlank() || trackId.isBlank() || key.isBlank()) return
+        prefs.edit().putString(decryptionPrefKey(configId, trackId), key.trim()).apply()
+    }
+
+    fun decryptionKeyFor(configId: String?, trackId: String?): String? {
+        if (!::prefs.isInitialized || configId.isNullOrBlank() || trackId.isNullOrBlank()) return null
+        return prefs.getString(decryptionPrefKey(configId, trackId), null)?.trim()?.ifBlank { null }
+    }
+
+    fun clearDecryptionKey(configId: String, trackId: String) {
+        if (!::prefs.isInitialized) return
+        prefs.edit().remove(decryptionPrefKey(configId, trackId)).apply()
+    }
+
+    private fun decryptionPrefKey(configId: String, trackId: String): String =
+        PREFS_DECRYPTION_KEY + sha256((configId + "|" + trackId).toByteArray(Charsets.UTF_8))
 }
 
 class MorneyeInstallException(message: String) : Exception(message)
