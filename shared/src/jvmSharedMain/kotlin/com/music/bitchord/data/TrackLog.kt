@@ -8,6 +8,7 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicLong
 import kotlin.coroutines.CoroutineContext
 
 /**
@@ -140,6 +141,14 @@ object TrackLog {
     private var held = 0
 
     /**
+     * Bumped every time the buffer changes. A platform mirror can poll this
+     * cheaply and only rewrite its file when there is actually anything new,
+     * instead of rewriting the whole log on a timer for a session that is idle.
+     */
+    private val _revision = AtomicLong(0)
+    val revision: Long get() = _revision.get()
+
+    /**
      * Bounded by bytes rather than by line count: one `callExport result` line
      * carrying a search response is worth several hundred ordinary lines, and a
      * limit that counts them the same either wastes memory or throws away the
@@ -157,6 +166,7 @@ object TrackLog {
             while (held > MAX_HELD_CHARS && lines.isNotEmpty()) {
                 held -= lines.removeFirst().text.length
             }
+            _revision.incrementAndGet()
         }
     }
 
@@ -290,6 +300,7 @@ object TrackLog {
         synchronized(lines) {
             lines.clear()
             held = 0
+            _revision.incrementAndGet()
         }
         startedAt.clear()
     }

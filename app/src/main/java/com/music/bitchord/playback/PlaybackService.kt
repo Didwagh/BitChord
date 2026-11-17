@@ -651,6 +651,14 @@ class PlaybackService : MediaLibraryService() {
     private var trackSelectedAt: Long? = null
 
     /**
+     * The track whose pipeline state was last logged at [onIsPlayingChanged].
+     * `isPlaying` is not sound: it also goes true for a renderer that was set up
+     * with no audio track, which is exactly the silent-track case this line is
+     * there to explain. One line per track, not one per pause/resume.
+     */
+    private var pipelineLoggedFor: String? = null
+
+    /**
      * The last track that actually made a sound, which is how [recoverFrom]
      * tells "this never started" from "this died in the middle".
      *
@@ -885,8 +893,30 @@ class PlaybackService : MediaLibraryService() {
                 // Sound is out of the speaker, so whatever happens to this track
                 // from here is a failure mid-song. Also the one thing that can
                 // say the queue is not simply unplayable end to end.
-                audibleMediaId = exoPlayer.currentMediaItem?.mediaId
+                val mediaId = exoPlayer.currentMediaItem?.mediaId
+                audibleMediaId = mediaId
                 consecutiveErrorSkips = 0
+                // A track can be "playing" right through to the end of the timer
+                // with no decoder ever configured — the decoder events are the
+                // only proof that PCM was actually produced. Record the pipeline
+                // state once per track so a silent session says *why*: whether
+                // an audio track was selected, and whether either Format source
+                // the stats read was populated.
+                if (mediaId != null && pipelineLoggedFor != mediaId) {
+                    pipelineLoggedFor = mediaId
+                    val live = exoPlayer.audioFormat
+                    val audioGroups = exoPlayer.currentTracks.groups.filter { it.type == C.TRACK_TYPE_AUDIO }
+                    val selected = audioGroups.count { it.isSelected }
+                    TrackLog.i(
+                        "AUDIO_PIPE",
+                        "media=$mediaId volume=${exoPlayer.volume} state=${exoPlayer.playbackState} " +
+                            "audioGroups=${audioGroups.size} selected=$selected " +
+                            "live=${live?.sampleMimeType ?: "null"}/${live?.sampleRate ?: 0}/" +
+                            "${live?.channelCount ?: 0} remembered=" +
+                            "${currentAudioInputFormat?.sampleMimeType ?: "null"}",
+                        about = mediaId,
+                    )
+                }
             }
             if (isPlaying) registerCurrentPlay()
             // Nothing to read ahead for while paused, and a pause is often
