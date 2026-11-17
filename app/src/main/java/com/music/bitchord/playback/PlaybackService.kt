@@ -1895,6 +1895,10 @@ class PlaybackService : MediaLibraryService() {
             DsdExtractorsFactory(),
         )
             .setLoadErrorHandlingPolicy(PermanentAwareLoadErrorPolicy())
+            // A stray pssh in an addon's fMP4 used to be turned into an
+            // immediate DRM error by Media3's DRM_UNSUPPORTED. Only items that
+            // actually declare a drmConfiguration keep the real provider.
+            .setDrmSessionManagerProvider(clearAwareDrmSessionManagerProvider())
         // The watch, when it is the speaker, reads tracks through this same chain.
         WearBridge.attachStreams(AudioCache.playbackFactory(defaultDataSourceFactory))
 
