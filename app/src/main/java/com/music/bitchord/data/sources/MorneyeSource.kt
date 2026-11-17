@@ -269,6 +269,11 @@ class MorneyeSource(
                 }.getOrNull()
                 val elapsedMs = System.currentTimeMillis() - startedAt
                 if (downloadResult == null) {
+                    // The addon writes straight to outputPath. A connection abort
+                    // leaves a half-written file there, and existingFile() below
+                    // cannot tell it from a complete one — the next play would
+                    // reuse the stub and fail at the first sample. Delete it.
+                    discardPartialDownload(addonCacheDir, fileBase)
                     MorneyeFailureCooldown.record(failKey)
                     TrackLog.w(TAG, "[$addonKey] download for $rawTrackId returned nothing after ${elapsedMs}ms")
                     return@withContext null
@@ -283,6 +288,7 @@ class MorneyeSource(
                     } ?: return@withContext null)
 
                 if (!parsed.success) {
+                    discardPartialDownload(addonCacheDir, fileBase)
                     MorneyeFailureCooldown.record(failKey)
                     TrackLog.w(
                         TAG,
@@ -294,6 +300,7 @@ class MorneyeSource(
 
                 val filePath = parsed.filePath
                 if (filePath.isNullOrBlank()) {
+                    discardPartialDownload(addonCacheDir, fileBase)
                     MorneyeFailureCooldown.record(failKey)
                     TrackLog.w(TAG, "[$addonKey] download() success but no file_path")
                     return@withContext null
@@ -301,6 +308,7 @@ class MorneyeSource(
 
                 val file = File(filePath)
                 if (!file.exists() || file.length() == 0L) {
+                    discardPartialDownload(addonCacheDir, fileBase)
                     MorneyeFailureCooldown.record(failKey)
                     TrackLog.w(TAG, "[$addonKey] file_path does not exist or is empty: $filePath")
                     return@withContext null
@@ -446,6 +454,24 @@ class MorneyeSource(
             ?.asSequence()
             ?.filter { it.isFile && it.length() > 0 && it.name.startsWith("$base.") }
             ?.maxByOrNull { it.lastModified() }
+
+    /**
+     * Remove every file this track/tier wrote, so a failed transfer cannot be
+     * mistaken for a cached track by [existingFile] on the next play. Called on
+     * every failure path after the addon has been given a path to write to.
+     */
+    private fun discardPartialDownload(dir: File, base: String) {
+        dir.listFiles()
+            ?.asSequence()
+            ?.filter { it.isFile && it.name.startsWith("$base.") }
+            ?.forEach { file ->
+                if (file.delete()) {
+                    TrackLog.d(TAG, "removed partial download ${file.name} (${file.length()} bytes)")
+                } else {
+                    TrackLog.w(TAG, "could not remove partial download ${file.name}")
+                }
+            }
+    }
 
     /**
      * The container the bytes actually are, read from the first few bytes.
