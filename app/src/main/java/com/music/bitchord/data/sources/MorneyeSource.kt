@@ -456,34 +456,48 @@ class MorneyeSource(
      * is here.
      */
     private fun detectCodec(file: File): String? = runCatching {
-        val head = ByteArray(64)
+        val head = ByteArray(HEAD_SCAN_BYTES)
         val read = file.inputStream().use { it.read(head) }
-        if (read < 4) return@runCatching null
+        return@runCatching codecFromHeader(head, read)
+    }.getOrNull()
+
+    /**
+     * Pure header reader, kept separate from file I/O so MP4-wrapped lossless
+     * cases can be tested without a fixture file. The `dfLa`/`alac` sample
+     * entries sit well past the first 64 bytes, so a header-only check used to
+     * call these files AAC.
+     */
+    internal fun codecFromHeader(head: ByteArray, read: Int): String? {
+        if (read < 4) return null
         fun ascii(offset: Int, length: Int): String =
-            String(head, offset, length, Charsets.ISO_8859_1)
+            String(head, offset, minOf(read, offset + length), Charsets.ISO_8859_1).take(length)
         fun at(offset: Int): Int = head[offset].toInt() and 0xFF
-        when {
+        return when {
             ascii(0, 4) == "fLaC" -> "flac"
             ascii(0, 4) == "RIFF" && read >= 12 && ascii(8, 4) == "WAVE" -> "wav"
             ascii(0, 4) == "OggS" -> {
                 val body = String(head, 0, read, Charsets.ISO_8859_1)
                 when {
                     "OpusHead" in body -> "opus"
-                    "vorbis" in body   -> "vorbis"
-                    else               -> "ogg"
+                    "vorbis" in body -> "vorbis"
+                    else -> "ogg"
                 }
             }
             ascii(0, 3) == "ID3" -> "mp3"
             read >= 12 && ascii(4, 4) == "ftyp" -> {
                 val body = String(head, 0, read, Charsets.ISO_8859_1)
-                if ("alac" in body) "alac" else "aac"
+                when {
+                    "dfLa" in body -> "flac"
+                    "alac" in body -> "alac"
+                    else -> "aac"
+                }
             }
             at(0) == 0xFF && (at(1) and 0xF6) == 0xF0 -> "aac"
             at(0) == 0xFF && (at(1) and 0xE0) == 0xE0 -> "mp3"
             ascii(0, 4) == "caff" -> "alac"
             else -> null
         }
-    }.getOrNull()
+    }
 
     /** A FLAC file's own STREAMINFO: sample rate and bit depth, no guessing. */
     private fun flacStreamInfo(file: File): FlacInfo? = runCatching {
@@ -557,6 +571,9 @@ class MorneyeSource(
 
     companion object {
         private const val TAG = "BitChord/Mornye"
+
+        /** Far enough into an MP4 to reach the audio sample entry. */
+        private const val HEAD_SCAN_BYTES = 65_536
 
         /**
          * One lock per addon and tier. Two prefetches for the same track — the

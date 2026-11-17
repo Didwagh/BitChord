@@ -29,6 +29,8 @@ import androidx.media3.common.MimeTypes
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.common.Timeline
+import androidx.media3.common.Tracks
+import androidx.media3.common.TrackSelectionOverride
 import androidx.core.net.toUri
 import androidx.media3.common.MediaMetadata
 import androidx.media3.common.audio.AudioProcessor
@@ -659,6 +661,16 @@ class PlaybackService : MediaLibraryService() {
     private var pipelineLoggedFor: String? = null
 
     /**
+     * The track we last had to force an audio selection for, see
+     * [ensureAudioSelected]. Cleared as soon as a track selects its own audio,
+     * so an override never leaks into the next song.
+     */
+    private var forcedAudioFor: String? = null
+
+    /** The track whose track-group formats were last written to the log. */
+    private var tracksLoggedFor: String? = null
+
+    /**
      * The last track that actually made a sound, which is how [recoverFrom]
      * tells "this never started" from "this died in the middle".
      *
@@ -916,6 +928,7 @@ class PlaybackService : MediaLibraryService() {
                             "${currentAudioInputFormat?.sampleMimeType ?: "null"}",
                         about = mediaId,
                     )
+                    ensureAudioSelected(exoPlayer, mediaId, audioGroups, selected)
                 }
             }
             if (isPlaying) registerCurrentPlay()
@@ -1184,6 +1197,53 @@ class PlaybackService : MediaLibraryService() {
         }
     }
 
+    /**
+     * Force a selection when a track exposes an audio group the default selector
+     * left empty. A silent track is indistinguishable from a paused one by
+     * `isPlaying` alone — the position timer runs and the stats page has no
+     * decoder Format to show. Seen on lossless-in-MP4 downloads from addons:
+     * one audio group, zero selected, no `DECODE` event at all.
+     *
+     * The override is per-track and per-player: it is dropped the moment a
+     * track selects its own audio, and a crossfade's other player keeps its own
+     * parameters, so a forced selection cannot leak into the next song.
+     */
+    private fun ensureAudioSelected(
+        player: Player,
+        mediaId: String,
+        audioGroups: List<Tracks.Group>,
+        selected: Int,
+    ) {
+        if (selected == 0 && audioGroups.isNotEmpty() && forcedAudioFor != mediaId) {
+            forcedAudioFor = mediaId
+            runCatching {
+                player.trackSelectionParameters = player.trackSelectionParameters
+                    .buildUpon()
+                    .setOverrideForType(TrackSelectionOverride(audioGroups.first().mediaTrackGroup, 0))
+                    .build()
+                TrackLog.w(
+                    "AUDIO_PIPE",
+                    "no audio track selected for $mediaId; forced the first one",
+                    about = mediaId,
+                )
+            }.onFailure {
+                TrackLog.w(
+                    "AUDIO_PIPE",
+                    "could not force an audio track for $mediaId: ${it.message}",
+                    about = mediaId,
+                )
+            }
+        } else if (selected > 0 && forcedAudioFor != null) {
+            forcedAudioFor = null
+            runCatching {
+                player.trackSelectionParameters = player.trackSelectionParameters
+                    .buildUpon()
+                    .clearOverridesOfType(C.TRACK_TYPE_AUDIO)
+                    .build()
+            }
+        }
+    }
+
     /** Registered alongside [playbackListener], and moved with it. */
     private val formatListener = object : AnalyticsListener {
         override fun onAudioInputFormatChanged(
@@ -1221,6 +1281,32 @@ class PlaybackService : MediaLibraryService() {
             currentAudioInputFormat = format
             publishNerdStats()
             applyOutputRoute()
+        }
+
+        /**
+         * The extractor's own account of what it found, before any decoder is
+         * chosen. This is the line that separates "there was no audio track in
+         * the file" from "there was one and nothing selected it", which is the
+         * difference between a bad download and a player bug.
+         */
+        override fun onTracksChanged(eventTime: AnalyticsListener.EventTime, tracks: Tracks) {
+            val mediaId = eventTime.mediaId() ?: return
+            if (mediaId != player?.currentMediaItem?.mediaId || tracksLoggedFor == mediaId) return
+            tracksLoggedFor = mediaId
+            val audio = tracks.groups.filter { it.type == C.TRACK_TYPE_AUDIO }
+            val detail = audio.joinToString("; ") { group ->
+                val formats = (0 until group.length).joinToString(",") { index ->
+                    val format = group.getTrackFormat(index)
+                    "${format.sampleMimeType ?: "?"}/${format.sampleRate}/${format.channelCount}" +
+                        "/codecs=${format.codecs ?: "?"}"
+                }
+                "selected=${group.isSelected}[$formats]"
+            }
+            TrackLog.i(
+                "AUDIO_PIPE",
+                "tracks $mediaId: groups=${tracks.groups.size} audio=${audio.size} $detail",
+                about = mediaId,
+            )
         }
 
         /**
