@@ -11,6 +11,7 @@ import androidx.media3.exoplayer.drm.DrmSessionManager
 import androidx.media3.exoplayer.drm.FrameworkCryptoConfig
 import com.music.bitchord.data.TrackLog
 import java.util.Base64
+import java.util.UUID
 
 private const val TAG = "BitChord/ClearKey"
 
@@ -84,13 +85,29 @@ private fun createClearKeySession(keyHex: String, drmInitData: DrmInitData?): Dr
     return try {
         val sessionId = drm.openSession()
         val kids = keyIdsFromDrmInitData(drmInitData).ifEmpty { listOf(ByteArray(16)) }
-        // getKeyRequest is what tells the plugin which KIDs the session needs.
-        // The init data is the PSSH Media3 parsed from the addon's file; some
-        // addons omit it, in which case the zero KID above is enough.
-        runCatching {
-            drm.getKeyRequest(sessionId, firstPssh(drmInitData), "cenc", MediaDrm.KEY_TYPE_STREAMING, null)
-        }.onFailure { TrackLog.d(TAG, "ClearKey key request: ${it.message}") }
-        drm.provideKeyResponse(sessionId, clearKeyResponse(key, kids).toByteArray(Charsets.UTF_8))
+        // Android's ClearKey plugin rejects the file's Widevine/Amazon PSSH
+        // (cdmError 4). It expects its own system ID and a version-1 box whose
+        // payload is the KID list, so build that from the KIDs Media3 parsed.
+        val request = runCatching {
+            drm.getKeyRequest(
+                sessionId,
+                clearKeyInitData(kids),
+                "cenc",
+                MediaDrm.KEY_TYPE_STREAMING,
+                null,
+            )
+        }
+        if (request.isSuccess) {
+            TrackLog.d(TAG, "ClearKey key request accepted for ${kids.size} key id(s)")
+        } else {
+            TrackLog.d(TAG, "ClearKey key request rejected: ${request.exceptionOrNull()?.message}")
+        }
+        val response = runCatching {
+            drm.provideKeyResponse(sessionId, clearKeyResponse(key, kids).toByteArray(Charsets.UTF_8))
+        }
+        if (response.isFailure) {
+            TrackLog.w(TAG, "ClearKey license response rejected: ${response.exceptionOrNull()?.message}")
+        }
         val cryptoConfig = FrameworkCryptoConfig(C.CLEARKEY_UUID, sessionId)
         TrackLog.d(TAG, "ClearKey session ready for ${kids.size} key id(s)")
         object : DrmSession {
@@ -159,13 +176,42 @@ internal fun keyIdsFromDrmInitData(data: DrmInitData?): List<ByteArray> {
     return kids
 }
 
-private fun firstPssh(data: DrmInitData?): ByteArray? {
-    if (data == null) return null
-    for (i in 0 until data.schemeDataCount) {
-        val box = data.get(i).data ?: continue
-        if (box.size >= 8 && box.copyOfRange(4, 8).contentEquals(PSH_TAG)) return box
+/**
+ * Android's ClearKey InitDataParser expects a PSSH with the ClearKey system
+ * ID, version 1, the KID count where a v0 box stores it, and a trailing
+ * four-byte DataSize of zero. Mirroring that layout avoids `cdmError:4`
+ * when the media contains only an Amazon/Widevine PSSH.
+ */
+internal fun clearKeyInitData(kids: List<ByteArray>): ByteArray {
+    val ids = kids.ifEmpty { listOf(ByteArray(16)) }
+    val size = 12 + 16 + 4 + ids.size * 16 + 4
+    val out = ByteArray(size)
+    putBe32(out, 0, size)
+    PSH_TAG.copyInto(out, 4)
+    out[8] = 1 // version; Android ClearKey requires this even though KIDs follow
+    uuidBytes(C.CLEARKEY_UUID).copyInto(out, 12)
+    putBe32(out, 28, ids.size)
+    ids.forEachIndexed { index, kid ->
+        require(kid.size == 16) { "ClearKey KID must be 16 bytes" }
+        kid.copyInto(out, 32 + index * 16)
     }
-    return null
+    return out // last four bytes are DataSize(0)
+}
+
+private fun uuidBytes(uuid: UUID): ByteArray {
+    val high = uuid.mostSignificantBits
+    val low = uuid.leastSignificantBits
+    return ByteArray(16) { i ->
+        val bits = if (i < 8) high shr (56 - i * 8) else low shr (120 - i * 8)
+        (bits.toInt() and 0xff).toByte()
+    }
+}
+
+private fun putBe32(bytes: ByteArray, at: Int, value: Int) {
+    bytes[at] = (value ushr 24).toByte()
+    bytes[at + 1] = (value ushr 16).toByte()
+    bytes[at + 2] = (value ushr 8).toByte()
+    bytes[at + 3] = value.toByte()
 }
 
 private val PSH_TAG = byteArrayOf(0x70, 0x73, 0x73, 0x68) // 'pssh'

@@ -2,6 +2,7 @@ package com.music.bitchord.playback
 
 import androidx.media3.common.C
 import androidx.media3.common.DrmInitData
+import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -49,6 +50,37 @@ class ClearKeyDrmSessionManagerTest {
         val junk = DrmInitData(DrmInitData.SchemeData(C.COMMON_PSSH_UUID, "cenc", ByteArray(8)))
         assertTrue(keyIdsFromDrmInitData(junk).isEmpty())
     }
+
+    @Test
+    fun `clearKeyInitData uses the Android ClearKey PSSH layout`() {
+        val kid = ByteArray(16) { it.toByte() }
+        val box = clearKeyInitData(listOf(kid))
+
+        assertEquals(52, box.size)
+        assertEquals(52, readBe32(box, 0))
+        assertArrayEquals("pssh".toByteArray(), box.copyOfRange(4, 8))
+        assertEquals(1, box[8].toInt())
+        assertEquals(0, box[9].toInt())
+        assertEquals(0, box[10].toInt())
+        assertEquals(0, box[11].toInt())
+        assertArrayEquals(
+            byteArrayOf(
+                0xe2.toByte(), 0x71, 0x9d.toByte(), 0x58, 0xa9.toByte(), 0x85.toByte(),
+                0xb3.toByte(), 0xc9.toByte(), 0x78, 0x1a, 0xb0.toByte(), 0x30,
+                0xaf.toByte(), 0x78, 0xd3.toByte(), 0x0e,
+            ),
+            box.copyOfRange(12, 28),
+        )
+        assertEquals(1, readBe32(box, 28))
+        assertArrayEquals(kid, box.copyOfRange(32, 48))
+        assertEquals(0, readBe32(box, 48))
+    }
+
+    private fun readBe32(bytes: ByteArray, at: Int): Int =
+        ((bytes[at].toInt() and 0xff) shl 24) or
+            ((bytes[at + 1].toInt() and 0xff) shl 16) or
+            ((bytes[at + 2].toInt() and 0xff) shl 8) or
+            (bytes[at + 3].toInt() and 0xff)
 
     private fun psshV0(kid: ByteArray): ByteArray {
         val size = 12 + 16 + 4 + kid.size
