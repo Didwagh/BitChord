@@ -617,19 +617,32 @@ object SourceRegistry {
         val newMornye = packages.map { pkg ->
             val caps = com.music.bitchord.data.sources.mornye.MorneyePackageManager
                 .capabilities(pkg.key)
-            // One Mornye-filtered line per manifest state. The install-time
+            // Booleans only: the auth URL carries callback state and must never
+            // reach the diagnostics log.
+            val sessionStatus = runCatching {
+                com.music.bitchord.data.sources.mornye.MorneyePackageManager
+                    .signedSessionStatus(pkg.key)
+            }.getOrNull()
+            val sessionState = when {
+                sessionStatus?.authenticated == true -> "connected"
+                sessionStatus?.verificationRequired == true -> "verification"
+                sessionStatus != null -> "disconnected"
+                else -> "none"
+            }
+            // One Mornye-filtered line per provider state. The install-time
             // warning is easy to miss because it happens long before a user
             // wonders why a feature is absent; this one is emitted whenever
             // the installed set changes, but only once per distinct state.
             val stateKey = "${pkg.key}|${pkg.version}|${caps?.unsupportedFeatures.orEmpty()}|" +
-                "${caps?.allowDownloads}|${caps?.checkValidLossless}"
+                "${caps?.allowDownloads}|${caps?.checkValidLossless}|$sessionState"
             logMornyeProviderStateOnce(stateKey) {
                 TrackLog.i(
                     "Mornye",
                     "[${pkg.key}] v${pkg.version} manifest: " +
                         "downloads=${caps?.downloads}, allowDownloads=${caps?.allowDownloads}, " +
                         "checkValidLossless=${caps?.checkValidLossless}, " +
-                        "unsupportedFeatures=[${caps?.unsupportedFeatures.orEmpty().joinToString()}]",
+                        "unsupportedFeatures=[${caps?.unsupportedFeatures.orEmpty().joinToString()}], " +
+                        "session=$sessionState",
                 )
             }
             val policy = caps?.let {

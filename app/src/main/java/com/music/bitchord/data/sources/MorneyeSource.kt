@@ -20,6 +20,7 @@ import com.music.bitchord.data.sources.mornye.morneyeProviderForAddon
 import com.music.bitchord.data.sources.mornye.morneyeResultMap
 import com.music.bitchord.data.sources.mornye.morneyeUrlProvider
 import com.music.bitchord.data.sources.mornye.morneyeUrlTrack
+import com.music.bitchord.data.sources.mornye.morneyeVerificationRequired
 import com.music.bitchord.data.sources.mornye.normaliseCodec
 import com.music.bitchord.data.sources.mornye.normaliseJsonLike
 import com.music.bitchord.data.sources.mornye.parseMorneyeAvailability
@@ -197,8 +198,17 @@ class MorneyeSource(
                     null
                 }
             }
-        }.onFailure { TrackLog.w(TAG, "[$addonKey] search error: ${it.message}") }
-            .getOrNull() ?: return@withContext emptyList()
+        }.onFailure {
+            if (morneyeVerificationRequired(it)) {
+                TrackLog.w(
+                    TAG,
+                    "[$addonKey] search needs provider verification; " +
+                        "open Mornye Extensions → $displayName → Connect",
+                )
+            } else {
+                TrackLog.w(TAG, "[$addonKey] search error: ${it.message}")
+            }
+        }.getOrNull() ?: return@withContext emptyList()
 
         val items: List<Any?> = when (raw) {
             is List<*>      -> raw
@@ -316,8 +326,16 @@ class MorneyeSource(
                 } else null,
             )
         }.onFailure {
-            if (it is MorneyeAddonException) TrackLog.d(TAG, "[$addonKey] availability: ${it.message}")
-            else TrackLog.w(TAG, "[$addonKey] availability failed: ${it.message}")
+            when {
+                morneyeVerificationRequired(it) -> TrackLog.w(
+                    TAG,
+                    "[$addonKey] availability needs provider verification; " +
+                        "open Mornye Extensions → $displayName → Connect",
+                )
+                it is MorneyeAddonException ->
+                    TrackLog.d(TAG, "[$addonKey] availability: ${it.message}")
+                else -> TrackLog.w(TAG, "[$addonKey] availability failed: ${it.message}")
+            }
         }.getOrNull()
     }
 

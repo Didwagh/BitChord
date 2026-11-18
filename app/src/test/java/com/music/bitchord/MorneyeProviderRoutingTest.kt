@@ -4,8 +4,10 @@ import com.music.bitchord.data.sources.mornye.MorneyeProviderHint
 import com.music.bitchord.data.sources.mornye.mergeMorneyeTrack
 import com.music.bitchord.data.sources.mornye.morneyeAvailabilityOptions
 import com.music.bitchord.data.sources.mornye.morneyeCallError
+import com.music.bitchord.data.sources.mornye.morneyeProviderForAddon
 import com.music.bitchord.data.sources.mornye.morneyeUrlProvider
 import com.music.bitchord.data.sources.mornye.morneyeUrlTrack
+import com.music.bitchord.data.sources.mornye.morneyeVerificationRequired
 import com.music.bitchord.data.sources.mornye.parseMorneyeAvailability
 import com.music.bitchord.data.sources.mornye.resolveMorneyeAvailability
 import com.music.bitchord.data.sources.mornye.selectMorneyeUrlHandler
@@ -23,14 +25,26 @@ import org.junit.Test
 class MorneyeProviderRoutingTest {
 
     @Test
-    fun `recognises only known Deezer and Tidal URL shapes`() {
+    fun `recognises only known Deezer Tidal and Qobuz URL shapes`() {
         assertEquals(MorneyeProviderHint.DEEZER, morneyeUrlProvider("https://www.deezer.com/track/123"))
         assertEquals(MorneyeProviderHint.DEEZER, morneyeUrlProvider("https://deezer.page.link/abc?x=1"))
         assertEquals(MorneyeProviderHint.DEEZER, morneyeUrlProvider("deezer:track:123"))
         assertEquals(MorneyeProviderHint.TIDAL, morneyeUrlProvider("https://listen.tidal.com/track/456"))
         assertEquals(MorneyeProviderHint.TIDAL, morneyeUrlProvider("tidal://track/456"))
+        assertEquals(MorneyeProviderHint.QOBUZ, morneyeUrlProvider("https://open.qobuz.com/track/789"))
+        assertEquals(MorneyeProviderHint.QOBUZ, morneyeUrlProvider("qobuzapp://track/789"))
+        assertEquals(MorneyeProviderHint.QOBUZ, morneyeUrlProvider("qobuz:track:789"))
         assertNull(morneyeUrlProvider("Believer Imagine Dragons"))
         assertNull(morneyeUrlProvider("https://example.com/track/deezer/1"))
+        assertNull(morneyeUrlProvider("https://cdn.qobuz.com/track/789"))
+    }
+
+    @Test
+    fun `maps installed addon keys and labels to exact provider hints`() {
+        assertEquals(MorneyeProviderHint.DEEZER, morneyeProviderForAddon("deezer", "Deezer"))
+        assertEquals(MorneyeProviderHint.TIDAL, morneyeProviderForAddon("tidal-web", "Tidal"))
+        assertEquals(MorneyeProviderHint.QOBUZ, morneyeProviderForAddon("qobuz-web", "Qobuz"))
+        assertNull(morneyeProviderForAddon("amazon", "Amazon Music"))
     }
 
     @Test
@@ -47,7 +61,12 @@ class MorneyeProviderRoutingTest {
             "handleUrl",
             selectMorneyeUrlHandler(listOf("handleUrl"), MorneyeProviderHint.TIDAL),
         )
+        assertEquals(
+            "handleUrl",
+            selectMorneyeUrlHandler(listOf("handleUrl"), MorneyeProviderHint.QOBUZ),
+        )
         assertNull(selectMorneyeUrlHandler(listOf("handleurl"), MorneyeProviderHint.DEEZER))
+        assertNull(selectMorneyeUrlHandler(listOf("handleURL"), MorneyeProviderHint.QOBUZ))
     }
 
     @Test
@@ -59,6 +78,14 @@ class MorneyeProviderRoutingTest {
         )
         // A negative availability ticket is an answer, not a thrown call error.
         assertNull(morneyeCallError(mapOf("available" to false, "reason" to "no match")))
+    }
+
+    @Test
+    fun `verification failures are recognised for user-facing diagnostics`() {
+        assertTrue(morneyeVerificationRequired(IllegalStateException("VERIFY_REQUIRED")))
+        assertTrue(morneyeVerificationRequired(IllegalStateException("verification_required")))
+        assertFalse(morneyeVerificationRequired(IllegalStateException("HTTP 503")))
+        assertFalse(morneyeVerificationRequired(null))
     }
 
     @Test
@@ -127,6 +154,16 @@ class MorneyeProviderRoutingTest {
         assertEquals("deezer:123", options["deezer_id"])
         assertEquals(210_000, options["duration_ms"])
         assertEquals("deezer:123", (options["track"] as Map<*, *>)["id"])
+
+        val qobuzOptions = morneyeAvailabilityOptions(
+            MorneyeProviderHint.QOBUZ,
+            mapOf("id" to "qobuz:789", "name" to "Two"),
+            "qobuz:789",
+            null,
+        )
+        assertEquals("qobuz:789", qobuzOptions["qobuz_id"])
+        assertEquals(0, qobuzOptions["duration_ms"])
+        assertNull(qobuzOptions["deezer_id"])
 
         val merged = mergeMorneyeTrack(
             mapOf("id" to "1", "name" to "One"),

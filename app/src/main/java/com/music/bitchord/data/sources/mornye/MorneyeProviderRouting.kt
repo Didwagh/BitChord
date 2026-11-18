@@ -18,6 +18,7 @@ import java.util.Locale
 internal enum class MorneyeProviderHint(val directIdField: String) {
     DEEZER("deezer_id"),
     TIDAL("tidal_id"),
+    QOBUZ("qobuz_id"),
 }
 
 /** Recognises only URLs this layer can honestly route to an addon. */
@@ -27,6 +28,10 @@ internal fun morneyeUrlProvider(query: String): MorneyeProviderHint? {
     val lower = url.lowercase(Locale.ROOT)
     if (lower.startsWith("deezer:")) return MorneyeProviderHint.DEEZER
     if (lower.startsWith("tidal:")) return MorneyeProviderHint.TIDAL
+    if (lower.startsWith("qobuzapp://") || lower.startsWith("qobuz:track:") ||
+        lower.startsWith("qobuz:album:") || lower.startsWith("qobuz:artist:") ||
+        lower.startsWith("qobuz:playlist:")
+    ) return MorneyeProviderHint.QOBUZ
     if (!lower.startsWith("http://") && !lower.startsWith("https://")) return null
 
     val host = runCatching { URI(url).host?.lowercase(Locale.ROOT) }.getOrNull() ?: return null
@@ -38,19 +43,24 @@ internal fun morneyeUrlProvider(query: String): MorneyeProviderHint? {
         host == "tidal.com" || host == "www.tidal.com" ||
             host == "listen.tidal.com" || host.endsWith(".tidal.com") -> MorneyeProviderHint.TIDAL
 
+        // Mirrors the addon's parseURL: no wildcard subdomains here.
+        host == "qobuz.com" || host == "www.qobuz.com" ||
+            host == "play.qobuz.com" || host == "open.qobuz.com" -> MorneyeProviderHint.QOBUZ
+
         else -> null
     }
 }
 
 /**
- * Exact exports to try, in order. Deezer has shipped both spellings; Tidal has
- * only ever shipped `handleUrl`. Membership is checked with `in methods`, so
- * the runtime's case-sensitive lookup is never second-guessed.
+ * Exact exports to try, in order. Deezer has shipped both spellings; Tidal and
+ * Qobuz ship `handleUrl`. Membership is checked with `in methods`, so the
+ * runtime's case-sensitive lookup is never second-guessed.
  */
 internal fun morneyeUrlHandlers(provider: MorneyeProviderHint): List<String> =
     when (provider) {
         MorneyeProviderHint.DEEZER -> listOf("handleURL", "handleUrl")
         MorneyeProviderHint.TIDAL -> listOf("handleUrl")
+        MorneyeProviderHint.QOBUZ -> listOf("handleUrl")
     }
 
 internal fun selectMorneyeUrlHandler(
@@ -58,7 +68,7 @@ internal fun selectMorneyeUrlHandler(
     provider: MorneyeProviderHint,
 ): String? = morneyeUrlHandlers(provider).firstOrNull { it in methods }
 
-/** Identifies the two addons whose availability contract we actually implement. */
+/** Identifies the addons whose availability contract we actually implement. */
 internal fun morneyeProviderForAddon(
     addonKey: String,
     displayName: String = "",
@@ -70,6 +80,8 @@ internal fun morneyeProviderForAddon(
             MorneyeProviderHint.DEEZER
         key == "tidal-web" || key.contains("tidal") || label == "tidal" ->
             MorneyeProviderHint.TIDAL
+        key == "qobuz-web" || key.contains("qobuz") || label == "qobuz" ->
+            MorneyeProviderHint.QOBUZ
         else -> null
     }
 }
@@ -102,6 +114,13 @@ private fun flagOf(value: Any?): Boolean? = when (value) {
         else -> null
     }
     else -> null
+}
+
+/** A verification failure needs a user action, not a retry or a false empty result. */
+internal fun morneyeVerificationRequired(error: Throwable?): Boolean {
+    val message = error?.message.orEmpty()
+    return message.contains("VERIFY_REQUIRED", ignoreCase = true) ||
+        message.contains("verification_required", ignoreCase = true)
 }
 
 /**
