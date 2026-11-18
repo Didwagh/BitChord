@@ -9,6 +9,7 @@ import com.music.bitchord.data.sources.mornye.isLosslessCodec
 import com.music.bitchord.data.sources.mornye.kbpsFromLabel
 import com.music.bitchord.data.sources.mornye.kbpsOf
 import com.music.bitchord.data.sources.mornye.normaliseCodec
+import com.music.bitchord.data.sources.mornye.parseMorneyeTrack
 import com.music.bitchord.data.sources.mornye.sampleRateFromLabel
 import com.music.bitchord.data.sources.mornye.sampleRateOf
 import org.json.JSONObject
@@ -159,5 +160,43 @@ class MorneyeQualityTest {
         assertEquals(24, bitDepthOf(24))
         assertEquals(24, bitDepthOf("24-bit"))
         assertNull(bitDepthOf("x"))
+    }
+
+    @Test
+    fun `manifest download policy and feature gaps are reported`() {
+        val caps = capabilitiesOf(
+            mapOf(
+                "type" to listOf("metadata_provider", "download_provider"),
+                "allowDownloads" to 0,
+                "checkValidLossless" to "true",
+                "requiredRuntimeFeatures" to listOf("signedSession@3", "deferredPreview@1"),
+            ),
+        )
+        assertFalse(caps.allowDownloads)
+        assertTrue(caps.checkValidLossless)
+        assertEquals(listOf("deferredPreview@1"), caps.unsupportedFeatures)
+    }
+
+    @Test
+    fun `a plain FLAC row is not hi-res and Tidal Atmos mode is explicit`() {
+        val flac = parseMorneyeTrack(
+            mapOf("id" to "1", "name" to "One", "audio_quality" to "FLAC"),
+        )!!
+        assertTrue(flac.isLossless)
+        assertFalse(flac.isHiRes)
+        assertFalse(flac.isAtmos)
+
+        val atmos = parseMorneyeTrack(
+            mapOf(
+                "id" to "2",
+                "name" to "Two",
+                "audio_quality" to "HI_RES_LOSSLESS",
+                "audio_modes" to listOf("DOLBY_ATMOS"),
+            ),
+        )!!
+        assertTrue(atmos.isLossless)
+        assertTrue(atmos.isAtmos)
+        // An immersive mix must not inherit a hi-res PCM badge from its label.
+        assertFalse(atmos.isHiRes)
     }
 }

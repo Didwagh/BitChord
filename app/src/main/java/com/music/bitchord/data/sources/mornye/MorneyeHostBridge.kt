@@ -257,7 +257,7 @@ internal class MorneyeHostBridge(
         if (!hdrs.has("User-Agent"))
             builder.header("User-Agent", "Mozilla/5.0")
 
-        TrackLog.d(TAG, "file.download $url → $path")
+        TrackLog.d(TAG, "file.download ${redactedUrl(url)} → $path")
         httpClient.newCall(builder.build()).execute().use { resp ->
             if (!resp.isSuccessful) return JSONObject().apply {
                 put("success", false)

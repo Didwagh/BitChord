@@ -34,4 +34,16 @@ class MorneyeDecryptionResultTest {
         val parsed = parseMorneyeDownloadResult(json)
         assertEquals(null, parsed.decryptionKey)
     }
+
+    @Test
+    fun `provider-specific container aliases are read as claims`() {
+        val deezer = parseMorneyeDownloadResult(
+            JSONObject("""{"success":true,"file_path":"/tmp/a.mp3","actual_container":"mp3"}"""),
+        )
+        val tidal = parseMorneyeDownloadResult(
+            JSONObject("""{"success":true,"file_path":"/tmp/a.m4a","output_extension":"m4a"}"""),
+        )
+        assertEquals("mp3", deezer.format)
+        assertEquals("m4a", tidal.format)
+    }
 }

@@ -42,23 +42,12 @@ object MorneyePackageManager {
     private const val COMPAT_VERSION = "5.3.0"
 
     /**
-     * Runtime features this host actually implements. An addon that asks for
-     * one of the others is still installed — refusing it would hide a working
-     * download provider behind one optional nicety — but the gap is logged
-     * instead of being discovered later as a silent failure.
-     *
-     * Deliberately absent: `preparedContext@1` (the host passes no pre-resolved
-     * metadata into download(), so addons fetch it themselves) and
-     * `deferredPreview@1` (search rows carry no playable sample URL). Both are
-     * optional in the addons that declare them; Qobuz falls back to a metadata
-     * fetch and to no preview respectively.
+     * An addon that asks for an unimplemented feature is still installed —
+     * refusing it would hide a working download provider behind one optional
+     * nicety — but the gap is logged instead of being discovered later as a
+     * silent failure. The list itself lives beside the manifest parser so
+     * source sync can report the same truth without another copy.
      */
-    private val KNOWN_RUNTIME_FEATURES = setOf(
-        "signedSession@1", "signedSession@2", "signedSession@3",
-        "sessionGrant@1",
-        "downloadSegments@1",
-        "patternedFileTransform@1",
-    )
     private const val PREFS_KEY = "mornye_packages"
     private const val PREFS_REGISTRY = "mornye_registry"
     /** Per-track CENC keys, so a cached encrypted file still plays next launch. */
@@ -483,7 +472,7 @@ object MorneyePackageManager {
         if (declared != null) {
             val unsupported = (0 until declared.length())
                 .map { declared.optString(it) }
-                .filter { it.isNotBlank() && it !in KNOWN_RUNTIME_FEATURES }
+                .filter { it.isNotBlank() && it !in KNOWN_MORNYE_RUNTIME_FEATURES }
             if (unsupported.isNotEmpty()) {
                 TrackLog.w(
                     TAG,

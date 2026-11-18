@@ -3,17 +3,30 @@ package com.music.bitchord.data.sources
 import com.music.bitchord.data.TrackLog
 import com.music.bitchord.data.model.Song
 import com.music.bitchord.data.sources.mornye.MorneyeAddonException
+import com.music.bitchord.data.sources.mornye.MorneyeAvailability
 import com.music.bitchord.data.sources.mornye.MorneyeDownloadResult
 import com.music.bitchord.data.sources.mornye.MorneyeFailureCooldown
 import com.music.bitchord.data.sources.mornye.MorneyePackageManager
+import com.music.bitchord.data.sources.mornye.MorneyeProviderHint
 import com.music.bitchord.data.sources.mornye.MorneyeQualityOption
 import com.music.bitchord.data.sources.mornye.MorneyeRuntime
 import com.music.bitchord.data.sources.mornye.isAtmosClaim
 import com.music.bitchord.data.sources.mornye.isLosslessCodec
 import com.music.bitchord.data.sources.mornye.isMorneyeTrackItem
+import com.music.bitchord.data.sources.mornye.mergeMorneyeTrack
+import com.music.bitchord.data.sources.mornye.morneyeAvailabilityOptions
+import com.music.bitchord.data.sources.mornye.morneyeCallError
+import com.music.bitchord.data.sources.mornye.morneyeProviderForAddon
+import com.music.bitchord.data.sources.mornye.morneyeResultMap
+import com.music.bitchord.data.sources.mornye.morneyeUrlProvider
+import com.music.bitchord.data.sources.mornye.morneyeUrlTrack
 import com.music.bitchord.data.sources.mornye.normaliseCodec
+import com.music.bitchord.data.sources.mornye.normaliseJsonLike
+import com.music.bitchord.data.sources.mornye.parseMorneyeAvailability
 import com.music.bitchord.data.sources.mornye.parseMorneyeDownloadResult
 import com.music.bitchord.data.sources.mornye.parseMorneyeTrack
+import com.music.bitchord.data.sources.mornye.resolveMorneyeAvailability
+import com.music.bitchord.data.sources.mornye.selectMorneyeUrlHandler
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -21,6 +34,8 @@ import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
+import java.util.Collections
+import java.util.LinkedHashMap
 import java.util.Locale
 import java.util.concurrent.ConcurrentHashMap
 
@@ -66,6 +81,20 @@ class MorneyeSource(
      */
     @Volatile private var initialisedRuntime: MorneyeRuntime? = null
     private val initLock = Mutex()
+
+    /**
+     * Search rows carry the metadata availability needs (ISRC, title, artists,
+     * provider ids), while `stream()` receives only the addon's track id. Keep
+     * a bounded, access-ordered copy here so the optional availability pass can
+     * use the same row the listener actually picked.
+     */
+    private val rememberedTracks = Collections.synchronizedMap(
+        object : LinkedHashMap<String, Map<*, *>>(64, 0.75f, true) {
+            override fun removeEldestEntry(
+                eldest: MutableMap.MutableEntry<String, Map<*, *>>?,
+            ) = size > 512
+        },
+    )
 
     private fun runtime(): MorneyeRuntime? = MorneyePackageManager.runtime(addonKey)
 
@@ -115,6 +144,42 @@ class MorneyeSource(
             .onFailure { TrackLog.w(TAG, "[$addonKey] engine failed: ${it.message}") }
             .getOrDefault(emptyList())
 
+        // A pasted provider URL is a resolution request, not a text query.
+        // Only the addon whose export actually exists is asked, and only a
+        // `{type:"track",track:{…}}` answer becomes a playable row.
+        morneyeUrlProvider(query)?.let { provider ->
+            val handler = selectMorneyeUrlHandler(methods, provider)
+            if (handler == null) {
+                TrackLog.d(
+                    TAG,
+                    "[$addonKey] no URL handler for $provider (methods=${methods.joinToString()})",
+                )
+                return@withContext emptyList()
+            }
+            val resolved = runCatching { rt.invoke(handler, listOf(query.trim())) }
+                .onFailure {
+                    if (it is MorneyeAddonException) TrackLog.d(TAG, "[$addonKey] $handler: ${it.message}")
+                    else TrackLog.w(TAG, "[$addonKey] $handler failed: ${it.message}")
+                }.getOrNull()
+            val callError = morneyeCallError(resolved)
+            if (callError != null) {
+                TrackLog.w(TAG, "[$addonKey] $handler: $callError")
+                return@withContext emptyList()
+            }
+            val trackMap = morneyeUrlTrack(resolved)
+            if (trackMap == null) {
+                TrackLog.d(TAG, "[$addonKey] $handler did not return a track row")
+                return@withContext emptyList()
+            }
+            val song = songFromTrackMap(trackMap)
+            if (song == null) {
+                TrackLog.d(TAG, "[$addonKey] $handler returned an unusable track row")
+                return@withContext emptyList()
+            }
+            TrackLog.d(TAG, "[$addonKey] $handler resolved a track URL via $provider")
+            return@withContext listOf(song)
+        }
+
         // Try searchTracks first (the module-style addons), fall back to
         // customSearch (the metadata/download providers, Amazon among them).
         val raw = runCatching {
@@ -153,30 +218,107 @@ class MorneyeSource(
                 is Map<*, *>  -> item
                 else          -> return@mapNotNull null
             }
-            val track = parseMorneyeTrack(map) ?: return@mapNotNull null
-            if (!isMorneyeTrackItem(map)) return@mapNotNull null
-            Song(
-                videoId       = SourceRegistry.trackKey(config.id, track.id),
-                title         = track.title,
-                artist        = track.artist,
-                albumName     = track.album.ifBlank { null },
-                thumbnailUrl  = track.artworkUrl,
-                durationText  = track.durationMs?.div(1000)?.let { sec ->
-                    String.format(Locale.ROOT, "%d:%02d", sec / 60, sec % 60)
-                },
-                sourceQuality = when {
-                    track.isAtmos    -> ModuleSource.DOLBY
-                    track.isLossless -> ModuleSource.LOSSLESS
-                    else             -> null
-                },
-                sourceHiRes = track.isLossless && !track.isAtmos,
-            )
+            songFromTrackMap(map)
         }
             // Amazon's feed repeats a track in several shelves; one row per
             // track is what the list and the queue expect.
             .distinctBy { it.videoId }
         TrackLog.d(TAG, "[$addonKey] search '$query' → ${songs.size} rows")
         songs
+    }
+
+    /** Builds the app row from an addon track map and keeps its metadata for availability. */
+    private fun songFromTrackMap(item: Map<*, *>): Song? {
+        val map = morneyeResultMap(item) ?: return null
+        val track = parseMorneyeTrack(map) ?: return null
+        if (!isMorneyeTrackItem(map)) return null
+        rememberTrack(track.id, map)
+        return Song(
+            videoId       = SourceRegistry.trackKey(config.id, track.id),
+            title         = track.title,
+            artist        = track.artist,
+            albumName     = track.album.ifBlank { null },
+            thumbnailUrl  = track.artworkUrl,
+            durationText  = track.durationMs?.div(1000)?.let { sec ->
+                String.format(Locale.ROOT, "%d:%02d", sec / 60, sec % 60)
+            },
+            sourceQuality = when {
+                track.isAtmos    -> ModuleSource.DOLBY
+                track.isLossless -> ModuleSource.LOSSLESS
+                else             -> null
+            },
+            sourceHiRes = track.isHiRes && !track.isAtmos,
+        )
+    }
+
+    private fun rememberTrack(trackId: String, map: Map<*, *>) {
+        val normalised = normaliseJsonLike(map) as? Map<*, *> ?: return
+        synchronized(rememberedTracks) {
+            rememberedTracks[trackId] = normalised
+            rememberedTracks[SourceRegistry.trackKey(config.id, trackId)] = normalised
+        }
+    }
+
+    private fun rememberedTrack(trackId: String): Map<*, *> =
+        synchronized(rememberedTracks) {
+            rememberedTracks[trackId] ?: rememberedTracks[SourceRegistry.trackKey(config.id, trackId)]
+        } ?: normaliseJsonLike(mapOf("id" to trackId)) as Map<*, *>
+
+    private fun textField(map: Map<*, *>, vararg keys: String): String = keys
+        .firstNotNullOfOrNull { key ->
+            map[key]?.toString()?.trim()?.takeIf {
+                it.isNotBlank() && it.lowercase(Locale.ROOT) != "null"
+            }
+        }.orEmpty()
+
+    /**
+     * Optional availability → enrich → availability pass. A failed optional
+     * call is *not* a failed download: the addon may still resolve the row by
+     * its own id, so the caller falls back to that. A genuine `available:false`
+     * is returned and handled as a source miss.
+     */
+    private suspend fun resolveAvailability(
+        rt: MorneyeRuntime,
+        methods: List<String>,
+        provider: MorneyeProviderHint,
+        track: Map<*, *>,
+        rawTrackId: String,
+    ): MorneyeAvailability? {
+        if ("checkAvailability" !in methods) return null
+        var effectiveTrack = track
+        val meta = parseMorneyeTrack(track)
+        val isrc = textField(track, "isrc", "ISRC")
+        val name = meta?.title?.takeIf { it.isNotBlank() }
+            ?: textField(track, "name", "title").ifBlank { rawTrackId }
+        val artists = meta?.artist.orEmpty()
+        val duration = meta?.durationMs
+        val hasEnrichment = "enrichTrack" in methods
+
+        return runCatching {
+            resolveMorneyeAvailability(
+                check = {
+                    val options = morneyeAvailabilityOptions(
+                        provider, effectiveTrack, rawTrackId, duration,
+                    )
+                    parseMorneyeAvailability(
+                        rt.invoke("checkAvailability", listOf(isrc, name, artists, options)),
+                    )
+                },
+                enrich = if (hasEnrichment) suspend {
+                    val enriched = rt.invoke("enrichTrack", listOf(effectiveTrack))
+                    val error = morneyeCallError(enriched)
+                    val map = morneyeResultMap(enriched)
+                    when {
+                        error != null -> TrackLog.d(TAG, "[$addonKey] enrichTrack: $error")
+                        map != null -> effectiveTrack = mergeMorneyeTrack(effectiveTrack, map)
+                        else -> TrackLog.d(TAG, "[$addonKey] enrichTrack gave no usable metadata")
+                    }
+                } else null,
+            )
+        }.onFailure {
+            if (it is MorneyeAddonException) TrackLog.d(TAG, "[$addonKey] availability: ${it.message}")
+            else TrackLog.w(TAG, "[$addonKey] availability failed: ${it.message}")
+        }.getOrNull()
     }
 
     // ── Stream ────────────────────────────────────────────────────────────
@@ -228,23 +370,33 @@ class MorneyeSource(
                     // encrypted, without the key ever having been saved. It
                     // cannot be played; fetch it again so the addon hands us
                     // the key alongside the audio.
-                    if (isCencEncrypted(file) &&
-                        MorneyePackageManager.decryptionKeyFor(configId, rawTrackId) == null
-                    ) {
-                        TrackLog.d(
-                            TAG,
-                            "[$addonKey] cached ${file.name} is encrypted but has no saved key; " +
-                                "discarding and re-downloading",
-                        )
-                        discardPartialDownload(addonCacheDir, fileBase)
-                    } else {
-                        TrackLog.d(
-                            TAG,
-                            "[$addonKey] reusing ${file.name} (${file.length()} bytes) for $rawTrackId",
-                        )
-                        MorneyePackageManager.rememberCachedFile(configId, rawTrackId, file.absolutePath)
-                        MorneyeFailureCooldown.clear(failKey)
-                        return@withContext buildStream(file, quality, request, parsed = null)
+                    when {
+                        isManifestFile(file) -> {
+                            TrackLog.w(
+                                TAG,
+                                "[$addonKey] cached ${file.name} is a DASH/XML manifest, not audio; " +
+                                    "discarding and re-downloading",
+                            )
+                            discardPartialDownload(addonCacheDir, fileBase)
+                        }
+                        isCencEncrypted(file) &&
+                            MorneyePackageManager.decryptionKeyFor(configId, rawTrackId) == null -> {
+                            TrackLog.d(
+                                TAG,
+                                "[$addonKey] cached ${file.name} is encrypted but has no saved key; " +
+                                    "discarding and re-downloading",
+                            )
+                            discardPartialDownload(addonCacheDir, fileBase)
+                        }
+                        else -> {
+                            TrackLog.d(
+                                TAG,
+                                "[$addonKey] reusing ${file.name} (${file.length()} bytes) for $rawTrackId",
+                            )
+                            MorneyePackageManager.rememberCachedFile(configId, rawTrackId, file.absolutePath)
+                            MorneyeFailureCooldown.clear(failKey)
+                            return@withContext buildStream(file, quality, request, parsed = null)
+                        }
                     }
                 }
 
@@ -256,6 +408,31 @@ class MorneyeSource(
                             "letting another source answer",
                     )
                     return@withContext null
+                }
+
+                // Authoritative ticket first, as Lokal does. Only the two
+                // addons whose availability contract we know are asked, and
+                // only now that a download is actually needed — a cached file
+                // or an active cooldown never pays for this call.
+                val provider = morneyeProviderForAddon(addonKey, displayName)
+                val availability = if (provider != null) {
+                    resolveAvailability(rt, methods, provider, rememberedTrack(rawTrackId), rawTrackId)
+                } else null
+                if (availability != null && !availability.available) {
+                    discardPartialDownload(addonCacheDir, fileBase)
+                    MorneyeFailureCooldown.record(failKey)
+                    TrackLog.d(
+                        TAG,
+                        "[$addonKey] $provider availability refused $rawTrackId: " +
+                            "${availability.reason ?: "no reason given"}; letting another source answer",
+                    )
+                    return@withContext null
+                }
+                val downloadTrackId = availability?.trackId?.takeIf { it.isNotBlank() } ?: rawTrackId
+                val options = mutableMapOf<String, Any?>("forPlayback" to true)
+                availability?.preparedContext?.let { options["preparedContext"] = it }
+                if (availability?.preparedContext != null) {
+                    TrackLog.d(TAG, "[$addonKey] passing preparedContext to download in fifth argument")
                 }
 
                 // The addon may rename the extension (e.g. .flac → .m4a for
@@ -276,8 +453,7 @@ class MorneyeSource(
                 val downloadResult = runCatching {
                     rt.invoke(
                         "download",
-                        listOf(rawTrackId, quality?.id, outputPath, null,
-                            mapOf("forPlayback" to true)),
+                        listOf(downloadTrackId, quality?.id, outputPath, null, options),
                     )
                 }.onFailure {
                     if (it is MorneyeAddonException) TrackLog.d(TAG, "[$addonKey] addon: ${it.message}")
@@ -329,6 +505,15 @@ class MorneyeSource(
                     TrackLog.w(TAG, "[$addonKey] file_path does not exist or is empty: $filePath")
                     return@withContext null
                 }
+                // Tidal's DASH path can hand back the MPD itself when the
+                // segment info is stale. It is not audio and must never be
+                // cached under a `.flac` name, even briefly.
+                if (isManifestFile(file)) {
+                    discardPartialDownload(addonCacheDir, fileBase)
+                    MorneyeFailureCooldown.record(failKey)
+                    TrackLog.w(TAG, "[$addonKey] download() wrote a DASH/XML manifest, not audio: ${file.name}")
+                    return@withContext null
+                }
                 // Check the addon's codec claim against the bytes it wrote. The
                 // extension is a promise; the magic number is the answer.
                 val codecHint = parsed.codec ?: parsed.format?.let(::normaliseCodec)
@@ -366,7 +551,7 @@ class MorneyeSource(
                 TrackLog.d(
                     TAG,
                     "[$addonKey] cached $rawTrackId at $filePath in ${elapsedMs}ms — ${file.length()} bytes, " +
-                        "codec=${detected ?: codecHint ?: guessCodecFromPath(filePath) ?: "unknown"}",
+                        "codec=${detected ?: codecHint ?: "unknown"}",
                 )
                 return@withContext buildStream(file, quality, request, parsed)
             }
@@ -416,26 +601,28 @@ class MorneyeSource(
                     .thenByDescending { it.kbps ?: 0 },
             )
 
-    private fun buildStream(
+    internal fun buildStream(
         file: File,
         quality: MorneyeQualityOption?,
         request: StreamRequest,
         parsed: MorneyeDownloadResult?,
     ): SourceStream {
+        // The bytes decide the codec. The addon's own observation of what it
+        // wrote is the next best thing; the manifest tier and the filename we
+        // chose ourselves are requests, not evidence, and must never make an
+        // unknown container look like FLAC.
         val codec = detectCodec(file)
             ?: parsed?.codec
             ?: parsed?.format?.let(::normaliseCodec)
-            ?: quality?.codec
-            ?: guessCodecFromPath(file.name)
 
         // Measurements come from the bytes first: a FLAC header states its own
         // sample rate and bit depth, and that is a fact rather than a promise.
+        // The addon may state them too; the requested tier may not.
         val flac = if (codec == "flac") flacStreamInfo(file) else null
-        val sampleRate = flac?.sampleRateHz ?: parsed?.sampleRateHz ?: quality?.sampleRateHz
-        val bitDepth = flac?.bitDepth ?: parsed?.bitDepth ?: quality?.bitDepth
+        val sampleRate = flac?.sampleRateHz ?: parsed?.sampleRateHz
+        val bitDepth = flac?.bitDepth ?: parsed?.bitDepth
         val statedKbps = parsed?.kbps
         val inferredKbps = quality?.kbps?.takeIf { statedKbps == null }
-        val lossless = if (codec != null) isLosslessCodec(codec) else quality?.isLossless ?: false
         val atmosClaim = parsed?.quality?.let { isAtmosClaim(codec, it) }
             ?: quality?.let { isAtmosClaim(codec, it.label) }
             ?: false
@@ -447,6 +634,9 @@ class MorneyeSource(
             bitDepth     = bitDepth,
             kbpsInferred = statedKbps == null && inferredKbps != null,
         )
+        // A statement about what arrived. A lossless tier that produced
+        // unidentifiable bytes is a fallback, not a successful lossless result.
+        val lossless = format.isLossless == true
 
         // "Below request" is a statement about what arrived, not about what was
         // asked for. Lossless was requested and the bytes are not lossless;
@@ -509,6 +699,29 @@ class MorneyeSource(
             }
         }
         return false
+    }
+
+    /** Reject DASH/MPD text before it can be cached as an audio file. */
+    private fun isManifestFile(file: File): Boolean = runCatching {
+        val head = ByteArray(MANIFEST_SCAN_BYTES)
+        val read = file.inputStream().use { it.read(head) }
+        looksLikeManifestBytes(head, read)
+    }.getOrDefault(false)
+
+    internal fun looksLikeManifestBytes(head: ByteArray, read: Int): Boolean {
+        var at = 0
+        if (read >= 3 && head[0] == 0xEF.toByte() &&
+            head[1] == 0xBB.toByte() && head[2] == 0xBF.toByte()
+        ) at = 3
+        while (at < read && when (head[at].toInt() and 0xFF) {
+                0x20, 0x09, 0x0A, 0x0D -> true
+                else -> false
+            }
+        ) at++
+        if (at >= read) return false
+        val text = String(head, at, read - at, Charsets.ISO_8859_1)
+        return text.startsWith("<?xml", ignoreCase = true) ||
+            text.startsWith("<MPD", ignoreCase = true)
     }
 
     private fun containsAscii(data: ByteArray, needle: ByteArray): Boolean {
@@ -654,18 +867,6 @@ class MorneyeSource(
         }
     }
 
-    private fun guessCodecFromPath(path: String): String? = when {
-        path.endsWith(".flac", ignoreCase = true) -> "flac"
-        path.endsWith(".m4a",  ignoreCase = true) -> "aac"
-        path.endsWith(".mp3",  ignoreCase = true) -> "mp3"
-        path.endsWith(".alac", ignoreCase = true) -> "alac"
-        path.endsWith(".ogg",  ignoreCase = true) -> "vorbis"
-        path.endsWith(".opus", ignoreCase = true) -> "opus"
-        path.endsWith(".wav",  ignoreCase = true) -> "wav"
-        path.endsWith(".aiff", ignoreCase = true) -> "aiff"
-        else -> null
-    }
-
     private fun sanitise(id: String) =
         id.replace(Regex("[^a-zA-Z0-9_\\-]"), "_").take(80)
 
@@ -674,6 +875,9 @@ class MorneyeSource(
 
         /** Far enough into an MP4 to reach the audio sample entry. */
         private const val HEAD_SCAN_BYTES = 65_536
+
+        /** A BOM and indentation still leave an MPD recognisable. */
+        private const val MANIFEST_SCAN_BYTES = 256
 
         /**
          * One lock per addon and tier. Two prefetches for the same track — the

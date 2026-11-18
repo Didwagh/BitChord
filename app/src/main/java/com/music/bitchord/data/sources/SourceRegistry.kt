@@ -227,7 +227,7 @@ object SourceRegistry {
      */
     fun addonsLeftOutOfDownloads(): List<Pair<SourceConfig, DownloadExclusion>> =
         enabledConfigs(configs.value)
-            .filter { it.kind == SourceKind.ADDON }
+            .filter { it.kind == SourceKind.ADDON || it.kind == SourceKind.MORNYE }
             .mapNotNull { config ->
                 when {
                     !config.allowDownloads -> config to DownloadExclusion.DOWNLOADS_NOT_ALLOWED
@@ -615,14 +615,39 @@ object SourceRegistry {
         val byKey = current.filter { it.kind == SourceKind.MORNYE }.associateBy { it.baseUrl }
 
         val newMornye = packages.map { pkg ->
+            val caps = com.music.bitchord.data.sources.mornye.MorneyePackageManager
+                .capabilities(pkg.key)
+            // One Mornye-filtered line per manifest state. The install-time
+            // warning is easy to miss because it happens long before a user
+            // wonders why a feature is absent; this one is emitted whenever
+            // the installed set changes, but only once per distinct state.
+            val stateKey = "${pkg.key}|${pkg.version}|${caps?.unsupportedFeatures.orEmpty()}|" +
+                "${caps?.allowDownloads}|${caps?.checkValidLossless}"
+            logMornyeProviderStateOnce(stateKey) {
+                TrackLog.i(
+                    "Mornye",
+                    "[${pkg.key}] v${pkg.version} manifest: " +
+                        "downloads=${caps?.downloads}, allowDownloads=${caps?.allowDownloads}, " +
+                        "checkValidLossless=${caps?.checkValidLossless}, " +
+                        "unsupportedFeatures=[${caps?.unsupportedFeatures.orEmpty().joinToString()}]",
+                )
+            }
+            val policy = caps?.let {
+                Pair(it.allowDownloads, it.checkValidLossless)
+            } ?: Pair(byKey[pkg.key]?.allowDownloads ?: true,
+                byKey[pkg.key]?.checkValidLossless ?: false)
             byKey[pkg.key] ?.copy(
-                label   = pkg.displayName,
-                enabled = pkg.enabled,
+                label              = pkg.displayName,
+                enabled            = pkg.enabled,
+                allowDownloads     = policy.first,
+                checkValidLossless = policy.second,
             ) ?: SourceConfig(
-                kind    = SourceKind.MORNYE,
-                label   = pkg.displayName,
-                baseUrl = pkg.key,          // key is stored in baseUrl
-                enabled = pkg.enabled,
+                kind               = SourceKind.MORNYE,
+                label              = pkg.displayName,
+                baseUrl            = pkg.key,          // key is stored in baseUrl
+                enabled            = pkg.enabled,
+                allowDownloads     = policy.first,
+                checkValidLossless = policy.second,
             )
         }
 
@@ -630,9 +655,18 @@ object SourceRegistry {
         val nonMornye = current.filterNot { it.kind == SourceKind.MORNYE }
         val updated = nonMornye + newMornye
         if (updated.map { it.id } != current.map { it.id } ||
-            updated.map { it.enabled } != current.map { it.enabled }) {
+            updated.map { it.enabled } != current.map { it.enabled } ||
+            updated.map { it.allowDownloads } != current.map { it.allowDownloads } ||
+            updated.map { it.checkValidLossless } != current.map { it.checkValidLossless }) {
             publish(updated)
         }
+    }
+
+    private val loggedMornyeProviderStates = mutableSetOf<String>()
+
+    @Synchronized
+    private fun logMornyeProviderStateOnce(key: String, log: () -> Unit) {
+        if (loggedMornyeProviderStates.add(key)) log()
     }
 
     private const val KEY_SOURCES = "sources"

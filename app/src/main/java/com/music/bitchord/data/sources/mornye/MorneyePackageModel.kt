@@ -24,6 +24,22 @@ data class MorneyeCapabilities(
     val downloads: Boolean,
     val qualityOptions: List<MorneyeQualityOption>,
     val accessKind: String?,
+    /** Manifest download policy, mirrored into SourceConfig like HTTP addons. */
+    val allowDownloads: Boolean = true,
+    val checkValidLossless: Boolean = false,
+    /** Optional runtime features this host does not implement. */
+    val unsupportedFeatures: List<String> = emptyList(),
+)
+
+/** Runtime features this host actually implements. Keep in sync with the bridge. */
+internal val KNOWN_MORNYE_RUNTIME_FEATURES = setOf(
+    "signedSession@1", "signedSession@2", "signedSession@3",
+    "sessionGrant@1",
+    "downloadSegments@1",
+    "patternedFileTransform@1",
+    // MorneyeSource passes a real preparedContext in download()'s fifth
+    // argument when an availability ticket supplies one.
+    "preparedContext@1",
 )
 
 data class MorneyeQualityOption(
@@ -48,6 +64,8 @@ data class MorneyeTrack(
     val qualityLabel: String?,
     val isLossless: Boolean,
     val isAtmos: Boolean,
+    /** Explicit hi-res label only; a plain FLAC/lossless label is not hi-res. */
+    val isHiRes: Boolean = false,
 )
 
 data class MorneyeStream(
@@ -103,6 +121,8 @@ private val LOSSLESS_TOKENS = setOf(
     // left to the codec, which the bytes settle. See [buildStream].
 )
 private val ATMOS_TOKENS = setOf("atmos", "dolby", "eac3", "ec-3", "ec3", "joc")
+/** Explicit hi-res wording only: plain FLAC/lossless is CD quality or unknown. */
+private val HI_RES_HINT = Regex("""hi[-_ ]?res|24[-_ ]?bit""", RegexOption.IGNORE_CASE)
 
 /**
  * Parse a track map from addon JS output into a [MorneyeTrack].
@@ -125,6 +145,16 @@ private val ATMOS_TOKENS = setOf("atmos", "dolby", "eac3", "ec-3", "ec3", "joc")
  * Treating the second shape as track-only offered albums and artists as
  * playable songs; a row without the field is still kept for the first shape.
  */
+/** Flattens the list/vector spellings addons use for `audio_modes`. */
+private fun flatFieldText(value: Any?): String = when (value) {
+    null -> ""
+    is String -> value
+    is JSONArray -> (0 until value.length()).joinToString(" ") { flatFieldText(value.opt(it)) }
+    is Collection<*> -> value.joinToString(" ") { flatFieldText(it) }
+    is Map<*, *> -> value.values.joinToString(" ") { flatFieldText(it) }
+    else -> value.toString()
+}
+
 internal fun isMorneyeTrackItem(map: Map<*, *>): Boolean {
     val type = map["item_type"]?.toString()?.trim()?.lowercase() ?: return true
     return type.isEmpty() || type == "track"
@@ -175,8 +205,14 @@ internal fun parseMorneyeTrack(map: Map<*, *>): MorneyeTrack? {
 
     val qualityLabel = (map["audio_quality"] ?: map["quality"] ?: map["audioQuality"]
         ?: map["fileType"])?.toString()
+    // Tidal puts Atmos in `audio_modes`, often alongside HI_RES_LOSSLESS. A row
+    // carrying both must not be badged as hi-res PCM: it is an immersive mix.
+    val modeText = listOf(map["audio_modes"], map["audioMode"], map["audio_mode"])
+        .joinToString(" ") { flatFieldText(it) }
     val lossless = qualityLabel?.lowercase()?.let { q -> LOSSLESS_TOKENS.any { it in q } } == true
-    val atmos    = qualityLabel?.lowercase()?.let { q -> ATMOS_TOKENS.any { it in q } } == true
+    val atmos = qualityLabel?.lowercase()?.let { q -> ATMOS_TOKENS.any { it in q } } == true ||
+        ATMOS_TOKENS.any { it in modeText.lowercase() }
+    val hiRes = qualityLabel?.let { HI_RES_HINT.containsMatchIn(it) } == true && !atmos
 
     return MorneyeTrack(
         id           = id,
@@ -188,6 +224,7 @@ internal fun parseMorneyeTrack(map: Map<*, *>): MorneyeTrack? {
         qualityLabel = qualityLabel,
         isLossless   = lossless,
         isAtmos      = atmos,
+        isHiRes      = hiRes,
     )
 }
 
@@ -221,8 +258,12 @@ internal fun parseMorneyeDownloadResult(result: Any?): MorneyeDownloadResult {
     val success = result.optBoolean("success", false)
     val filePath = result.optString("file_path", "").ifBlank { null }
         ?: result.optString("path", "").ifBlank { null }
-    val format   = (result.optString("format", "").ifBlank { null }
-        ?: result.optString("actual_extension", "").ifBlank { null })
+    // Deezer says `actual_container`; Tidal says `output_extension`. Both are
+    // only claims, but they are the addon's own observation of what it wrote,
+    // which is stronger than the tier we asked for or the filename we chose.
+    val format   = sequenceOf("format", "actual_extension", "actual_container", "output_extension")
+        .mapNotNull { result.optString(it, "").ifBlank { null } }
+        .firstOrNull()
     val error    = result.optString("error_message", "").ifBlank { null }
         ?: result.optString("error", "").ifBlank { null }
     val quality = (result.optString("quality", "").ifBlank { null }
@@ -287,6 +328,18 @@ private fun manifestObject(value: Any?): Map<*, *>? = when (value) {
     else          -> null
 }
 
+/** A manifest switch in any spelling addons use; unknown values keep the default. */
+private fun manifestFlag(value: Any?, default: Boolean): Boolean = when (value) {
+    null -> default
+    is Boolean -> value
+    is Number -> value.toDouble() != 0.0
+    else -> when (value.toString().trim().lowercase()) {
+        "1", "true", "yes", "on" -> true
+        "0", "false", "no", "off" -> false
+        else -> default
+    }
+}
+
 internal fun capabilitiesOf(manifest: Map<String, Any?>): MorneyeCapabilities {
     val type = manifestArray(manifest["type"])
     val searches = type.any { it.toString() in setOf("download_provider", "metadata_provider") }
@@ -335,7 +388,19 @@ internal fun capabilitiesOf(manifest: Map<String, Any?>): MorneyeCapabilities {
     // every search row look playable and sent prefetch into a `download` call
     // that could only answer "no_method".
     val downloads = type.any { it.toString() == "download_provider" }
-    return MorneyeCapabilities(searches, downloads, qualities, access)
+    val unsupported = manifestArray(manifest["requiredRuntimeFeatures"])
+        .map { it.toString() }
+        .filter { it.isNotBlank() && it !in KNOWN_MORNYE_RUNTIME_FEATURES }
+        .distinct()
+    return MorneyeCapabilities(
+        searches = searches,
+        downloads = downloads,
+        qualityOptions = qualities,
+        accessKind = access,
+        allowDownloads = manifestFlag(manifest["allowDownloads"], true),
+        checkValidLossless = manifestFlag(manifest["checkValidLossless"], false),
+        unsupportedFeatures = unsupported,
+    )
 }
 
 // ── Quality metadata ────────────────────────────────────────────────────────

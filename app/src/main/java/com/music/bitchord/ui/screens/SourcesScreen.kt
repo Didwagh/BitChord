@@ -909,7 +909,9 @@ private fun SourceRow(
             // rather than found out from where a downloaded file came from.
             // Read off the stored manifest, so it holds while the server is
             // down too.
-            if (config.kind == SourceKind.ADDON && config.isComplete) {
+            if ((config.kind == SourceKind.ADDON || config.kind == SourceKind.MORNYE) &&
+                config.isComplete
+            ) {
                 Row(
                     modifier = Modifier.padding(top = 2.dp),
                     verticalAlignment = Alignment.CenterVertically,
