@@ -195,6 +195,25 @@ object NerdStats {
         mimeType != null && (mimeType == "audio/raw" || mimeType.endsWith("wav", ignoreCase = true) || mimeType == "audio/x-wav")
 
     /**
+     * What the UI should print for a stream's bitrate.
+     *
+     * A lossless container such as FLAC often states no encoded bitrate at all.
+     * Its PCM throughput is still a real, comparable figure, but it must be
+     * labelled as PCM: writing it into [Snapshot.bitrateKbps] would claim a
+     * compressed rate the file never declared, and the existing tests
+     * deliberately guard against that. This helper keeps the two numbers apart
+     * while giving the stats screens and diagnostics something honest to show.
+     */
+    fun bitrateLabel(snapshot: Snapshot?): String? {
+        snapshot ?: return null
+        snapshot.bitrateKbps?.let { return "$it kbps" }
+        if (snapshot.isLossless) {
+            snapshot.pcmDataRateKbps?.let { return "PCM $it kbps" }
+        }
+        return null
+    }
+
+    /**
      * The upper bound in kbps for a low-bitrate / data-saver lossy stream.
      */
     const val LOW_QUALITY_MAX_KBPS = 80

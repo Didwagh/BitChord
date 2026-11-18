@@ -851,8 +851,8 @@ object AudioCache {
     }
 
     /**
-     * Every track the player has played from YouTube or JioSaavn audio that is
-     * still on disk, most recently used first — what the Cached songs folder
+     * Every track the player has played from YouTube, JioSaavn or an addon that
+     * is still on disk, most recently used first — what the Cached songs folder
      * lists. Only the entries playback read from count; see [Origin].
      *
      * A track owns up to several entries (see [keyFactory]); they are folded

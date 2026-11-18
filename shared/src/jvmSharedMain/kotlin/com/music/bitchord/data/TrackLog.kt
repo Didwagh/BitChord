@@ -348,7 +348,7 @@ object TrackLog {
         val measured = listOfNotNull(
             mimeType,
             bitDepth?.let { "$it-bit" },
-            bitrateKbps?.let { "$it kbps" },
+            NerdStats.bitrateLabel(this),
             sampleRateHz?.let { "$it Hz" },
             channels?.let { "${it}ch" },
         ).joinToString(" · ").ifEmpty { "nothing reported" }

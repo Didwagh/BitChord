@@ -266,7 +266,7 @@ fun AudioPipelineDialog(
             val sampleRate = nerdStats?.sampleRateHz?.let(::rateText)
                 ?: nerdStats?.claimed?.sampleRateHz?.let(::rateText)
                 ?: "—"
-            val bitrate = nerdStats?.bitrateKbps?.let { "$it kbps" } ?: "—"
+            val bitrate = NerdStats.bitrateLabel(nerdStats) ?: "—"
             val pcmDataRate = nerdStats?.pcmDataRateKbps?.let { "$it kbps" } ?: "—"
             val channels = when (nerdStats?.channels) {
                 1 -> stringResource(R.string.mono)

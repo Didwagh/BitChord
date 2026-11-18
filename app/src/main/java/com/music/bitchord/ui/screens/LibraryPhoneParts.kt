@@ -65,7 +65,7 @@ fun libraryLinks(): List<LibraryLink> {
             "local:all",
         ),
         // Opt-in from Settings → Storage: what the song cache is holding from
-        // YouTube and JioSaavn. See [com.music.bitchord.playback.AudioCache.cachedSongs].
+        // YouTube, JioSaavn and addons. See [com.music.bitchord.playback.AudioCache.cachedSongs].
         link(
             stringResource(R.string.cached_songs),
             stringResource(R.string.cached_songs_subtitle),

@@ -1264,7 +1264,11 @@ class PlaybackService : MediaLibraryService() {
             val khz = measured.sampleRateHz
                 ?.let { "%.1fkHz".format(Locale.ROOT, it / 1000.0) } ?: "?kHz"
             val kbps = format.bitrate.takeIf { it > 0 }
-                ?.let { "${it / 1000}kbps" } ?: "bitrate n/a"
+                ?.let { "${it / 1000}kbps" }
+                ?: measured.pcmBitrateKbps
+                    ?.takeIf { NerdStats.isLosslessMime(format.sampleMimeType) }
+                    ?.let { "pcm:${it}kbps" }
+                ?: "bitrate n/a"
             val depth = measured.bitDepth?.let { "${it}-bit" } ?: "?-bit"
             val channels = measured.channels?.let { "${it}ch" } ?: "?ch"
             TrackLog.i(

@@ -161,6 +161,36 @@ class NerdStatsRegressionTest {
     // ── Snapshot labels ──────────────────────────────────────────────────────
 
     @Test
+    fun losslessDisplayFallbackIsLabelledPcmInsteadOfFakingEncodedBitrate() {
+        val flac = NerdStats.Snapshot(
+            mimeType = "audio/flac",
+            bitrateKbps = null,
+            pcmDataRateKbps = 2117,
+            sampleRateHz = 44_100,
+            channels = 2,
+            bitDepth = 24,
+        )
+
+        assertEquals("PCM 2117 kbps", NerdStats.bitrateLabel(flac))
+        assertNull(flac.bitrateKbps)
+        assertEquals(2117, flac.pcmDataRateKbps)
+    }
+
+    @Test
+    fun encodedBitrateTakesPriorityOverPcmDisplayFallback() {
+        val flac = NerdStats.Snapshot(
+            mimeType = "audio/flac",
+            bitrateKbps = 785,
+            pcmDataRateKbps = 1411,
+            sampleRateHz = 44_100,
+            channels = 2,
+            bitDepth = 16,
+        )
+
+        assertEquals("785 kbps", NerdStats.bitrateLabel(flac))
+    }
+
+    @Test
     fun hiResFollowsTheMeasuredRate() {
         for (rate in listOf(44_100, 48_000, 96_000, 176_400, 192_000)) {
             val s = NerdStats.Snapshot(

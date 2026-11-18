@@ -1929,12 +1929,12 @@ private fun ShimmerText(
  * filled in, so a short line means little was known, never that something was
  * invented.
  *
- * Bitrate is stated for a lossless stream too, and is the rate its samples
- * decode to — 1411 for 16-bit/44.1kHz, 4608 for 24-bit/96kHz. It is the same
- * figure Tidal, Qobuz and Apple Music print next to a lossless track, and the
- * one a listener can carry from track to track; a FLAC's compressed rate
- * cannot, because it says more about how compressible that recording was than
- * about the copy being played.
+ * Bitrate is stated for a lossless stream too, but labelled as PCM when the
+ * file did not declare an encoded rate — 1411 for 16-bit/44.1kHz, 4608 for
+ * 24-bit/96kHz. That is the same figure Tidal, Qobuz and Apple Music print
+ * next to a lossless track, and the one a listener can carry from track to
+ * track; a FLAC's compressed rate cannot, because it says more about how
+ * compressible that recording was than about the copy being played.
  */
 @Composable
 private fun NerdStats.Snapshot.describe(): String? {
@@ -1942,7 +1942,7 @@ private fun NerdStats.Snapshot.describe(): String? {
         codecLabel(mimeType)?.let(::add)
         bitDepth?.let { add(stringResource(Res.string.bit_depth, it)) }
         sampleRateHz?.let { add(NerdStats.megahertzLabel(it) ?: "%.1f kHz".format(Locale.ROOT, it / 1000f)) }
-        bitrateKbps?.let { add("$it kbps") }
+        NerdStats.bitrateLabel(this@describe)?.let(::add)
         channels?.let {
             add(
                 when (it) {
