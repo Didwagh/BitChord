@@ -46,6 +46,68 @@ object ClearDrmSessionManager : DrmSessionManager {
 }
 
 /**
+ * A session manager whose key is looked up only when the sample format is
+ * ready.
+ *
+ * The [DrmSessionManagerProvider] runs when the media source is built, which on
+ * a source-backed row is during prefetch — before `stream()` has asked the
+ * addon for the file and before the addon has returned its CENC key. Reading
+ * the key there permanently captures "no key", and the file later reaches
+ * MediaCodec with encryption metadata but no crypto object. Resolving on the
+ * first [getCryptoType]/[acquireSession] call, which happens after the file is
+ * open, gives the download a chance to save the key first.
+ */
+@UnstableApi
+private class DeferredAddonDrmSessionManager(
+    private val configId: String?,
+    private val trackId: String?,
+) : DrmSessionManager {
+
+    private var playbackLooper: Looper? = null
+    private var playerId: PlayerId = PlayerId.UNSET
+    private var delegate: DrmSessionManager? = null
+
+    override fun setPlayer(playbackLooper: Looper, playerId: PlayerId) {
+        this.playbackLooper = playbackLooper
+        this.playerId = playerId
+        delegate?.setPlayer(playbackLooper, playerId)
+    }
+
+    private fun resolve(): DrmSessionManager = synchronized(this) {
+        delegate?.let { return@synchronized it }
+        val key = MorneyePackageManager.decryptionKeyFor(configId, trackId)
+        val chosen = if (key != null && clearKeySupported()) {
+            TrackLog.d(TAG, "deferred ClearKey ready for ${trackId ?: "unknown track"}")
+            ClearKeyDrmSessionManager(key)
+        } else {
+            TrackLog.d(
+                TAG,
+                "deferred key lookup for ${trackId ?: "unknown track"}: " +
+                    "keyFound=${key != null}, clearKeySupported=${clearKeySupported()}",
+            )
+            ClearDrmSessionManager
+        }
+        playbackLooper?.let { chosen.setPlayer(it, playerId) }
+        delegate = chosen
+        chosen
+    }
+
+    override fun acquireSession(
+        eventDispatcher: DrmSessionEventListener.EventDispatcher?,
+        format: Format,
+    ): DrmSession? = resolve().acquireSession(eventDispatcher, format)
+
+    override fun getCryptoType(format: Format): Int = resolve().getCryptoType(format)
+
+    override fun release() {
+        synchronized(this) {
+            delegate?.release()
+            delegate = null
+        }
+    }
+}
+
+/**
  * Provider for [DefaultMediaSourceFactory.setDrmSessionManagerProvider]: use
  * real DRM only when the item asked for it, and ignore stray PSSH boxes on
  * everything else.
@@ -57,11 +119,9 @@ fun clearAwareDrmSessionManagerProvider(): DrmSessionManagerProvider {
         if (item.localConfiguration?.drmConfiguration != null) {
             configured.get(item)
         } else {
-            // An addon may have handed back CENC-encrypted ISO-BMFF with the
-            // AES key in its download result. Provision that key into a
-            // ClearKey session before the samples reach MediaCodec; without
-            // it ExoPlayer queues encrypted buffers with no crypto object and
-            // dies with `queuing secure buffer without mCrypto or mDescrambler`.
+            // A source-backed row may be prefetched before its addon has
+            // returned the file and the CENC key. Keep its identity and defer
+            // the decision; everything else has no addon key to wait for.
             val uri = item.localConfiguration?.uri
             val uriConfigId = uri?.getQueryParameter("s")
             val uriTrackId = uri?.getQueryParameter("t")
@@ -73,16 +133,15 @@ fun clearAwareDrmSessionManagerProvider(): DrmSessionManagerProvider {
             val parsed = SourceRegistry.parseTrackKey(item.mediaId)
             val configId = uriConfigId ?: parsed?.first
             val trackId = uriTrackId ?: parsed?.second
-            val key = MorneyePackageManager.decryptionKeyFor(configId, trackId)
-            val supported = clearKeySupported()
+            val sourceTrack = configId != null && trackId != null
             TrackLog.d(
                 TAG,
                 "select: mediaId=${item.mediaId}, uriScheme=${uri?.scheme}, " +
-                    "uriAuthority=${uri?.authority}, keyParams=${uriConfigId != null && uriTrackId != null}, " +
-                    "keyFound=${key != null}, clearKeySupported=$supported",
+                    "uriAuthority=${uri?.authority}, sourceTrack=$sourceTrack, " +
+                    "clearKeySupported=${clearKeySupported()}",
             )
-            if (key != null && supported) {
-                ClearKeyDrmSessionManager(key)
+            if (sourceTrack) {
+                DeferredAddonDrmSessionManager(configId, trackId)
             } else {
                 ClearDrmSessionManager
             }
