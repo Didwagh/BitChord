@@ -10,6 +10,8 @@ import androidx.media3.exoplayer.drm.DrmSessionEventListener
 import androidx.media3.exoplayer.drm.DrmSessionManager
 import androidx.media3.exoplayer.drm.FrameworkCryptoConfig
 import com.music.bitchord.data.TrackLog
+import java.io.File
+import java.io.RandomAccessFile
 import java.util.Base64
 import java.util.UUID
 
@@ -30,6 +32,7 @@ private const val TAG = "BitChord/ClearKey"
 @UnstableApi
 internal class ClearKeyDrmSessionManager(
     private val keyHex: String,
+    private val filePath: String? = null,
 ) : DrmSessionManager {
 
     private var session: DrmSession? = null
@@ -41,7 +44,7 @@ internal class ClearKeyDrmSessionManager(
     private fun ensureSession(drmInitData: DrmInitData?): DrmSession? {
         if (!attempted) {
             attempted = true
-            session = createClearKeySession(keyHex, drmInitData)
+            session = createClearKeySession(keyHex, drmInitData, filePath?.let(::File))
             if (session == null) {
                 TrackLog.w(TAG, "ClearKey provisioning failed; falling back to a clear session")
             }
@@ -69,7 +72,11 @@ internal fun clearKeySupported(): Boolean = runCatching {
     MediaDrm.isCryptoSchemeSupported(C.CLEARKEY_UUID)
 }.getOrDefault(false)
 
-private fun createClearKeySession(keyHex: String, drmInitData: DrmInitData?): DrmSession? {
+private fun createClearKeySession(
+    keyHex: String,
+    drmInitData: DrmInitData?,
+    file: File?,
+): DrmSession? {
     val key = hexToBytes(keyHex) ?: run {
         TrackLog.w(TAG, "Mornye returned a decryption key that is not 16-byte hex")
         return null
@@ -84,7 +91,17 @@ private fun createClearKeySession(keyHex: String, drmInitData: DrmInitData?): Dr
     }
     return try {
         val sessionId = drm.openSession()
-        val kids = keyIdsFromDrmInitData(drmInitData).ifEmpty { listOf(ByteArray(16)) }
+        // The codec looks keys up by the KID in the track's `tenc` box, which
+        // Amazon's PSSH KIDs do not always match. Prefer that KID; fall back to
+        // PSSH KIDs only when the MP4 has no track-encryption box.
+        val psshKids = keyIdsFromDrmInitData(drmInitData)
+        val tencKids = file?.let(::keyIdsFromMp4).orEmpty()
+        val kids = tencKids.ifEmpty { psshKids }.ifEmpty { listOf(ByteArray(16)) }
+        TrackLog.d(
+            TAG,
+            "ClearKey KIDs: pssh=${psshKids.size}, tenc=${tencKids.size}, " +
+                "using=${kids.joinToString(",") { hex(it) }}",
+        )
         // Android's ClearKey plugin rejects the file's Widevine/Amazon PSSH
         // (cdmError 4). It expects its own system ID and a version-1 box whose
         // payload is the KID list, so build that from the KIDs Media3 parsed.
@@ -108,6 +125,8 @@ private fun createClearKeySession(keyHex: String, drmInitData: DrmInitData?): Dr
         if (response.isFailure) {
             TrackLog.w(TAG, "ClearKey license response rejected: ${response.exceptionOrNull()?.message}")
         }
+        val keyStatus = runCatching { drm.queryKeyStatus(sessionId) }.getOrNull()
+        TrackLog.d(TAG, "ClearKey key status entries=${keyStatus?.size ?: -1}")
         val cryptoConfig = FrameworkCryptoConfig(C.CLEARKEY_UUID, sessionId)
         TrackLog.d(TAG, "ClearKey session ready for ${kids.size} key id(s)")
         object : DrmSession {
@@ -198,6 +217,106 @@ internal fun clearKeyInitData(kids: List<ByteArray>): ByteArray {
     return out // last four bytes are DataSize(0)
 }
 
+/**
+ * Finds the KID in the MP4 track-encryption (`tenc`) box. The codec uses this
+ * KID, not necessarily the ones in PSSH boxes, to look up its ClearKey.
+ */
+internal fun keyIdsFromMp4(file: File): List<ByteArray> {
+    if (!file.isFile) return emptyList()
+    val found = LinkedHashMap<String, ByteArray>()
+    val chunk = ByteArray(1 shl 20)
+    var overlap = ByteArray(0)
+    var filePosition = 0L
+    runCatching {
+        RandomAccessFile(file, "r").use { raf ->
+            while (true) {
+                val read = raf.read(chunk)
+                if (read <= 0) break
+                val data = if (overlap.isEmpty()) chunk.copyOf(read) else overlap + chunk.copyOf(read)
+                val dataBase = filePosition - overlap.size
+                var searchFrom = 0
+                while (true) {
+                    val at = indexOf(data, TENC_TAG, searchFrom)
+                    if (at < 0) break
+                    tencKidAt(raf, dataBase + at - 4)?.let { found[hex(it)] = it }
+                    searchFrom = at + 4
+                }
+                searchFrom = 0
+                while (true) {
+                    val at = indexOf(data, SEIG_TAG, searchFrom)
+                    if (at < 0) break
+                    seigKidAt(raf, dataBase + at)?.let { found[hex(it)] = it }
+                    searchFrom = at + 4
+                }
+                filePosition += read
+                // KID helpers seek; put the cursor back at the scan position.
+                raf.seek(filePosition)
+                overlap = data.copyOfRange(maxOf(0, data.size - 7), data.size)
+            }
+        }
+    }.onFailure { TrackLog.w(TAG, "Could not inspect MP4 tenc box: ${it.message}") }
+    return found.values.toList()
+}
+
+private fun tencKidAt(raf: RandomAccessFile, boxStart: Long): ByteArray? {
+    if (boxStart < 0) return null
+    return runCatching {
+        raf.seek(boxStart)
+        val header = ByteArray(8)
+        raf.readFully(header)
+        if (!header.copyOfRange(4, 8).contentEquals(TENC_TAG)) return null
+        val size = be32(header, 0)
+        if (size < 8 && size != 1 && size != 0) return null
+        val payloadStart = if (size == 1) {
+            val large = ByteArray(8)
+            raf.readFully(large)
+            boxStart + 16
+        } else {
+            boxStart + 8
+        }
+        raf.seek(payloadStart)
+        val payload = ByteArray(24)
+        raf.readFully(payload)
+        payload.copyOfRange(8, 24)
+    }.getOrNull()
+}
+
+/** KID from an `seig` sample-group entry, used instead of `tenc` by some files. */
+private fun seigKidAt(raf: RandomAccessFile, seigOffset: Long): ByteArray? {
+    if (seigOffset < 4) return null
+    return runCatching {
+        raf.seek(seigOffset - 4)
+        val fullBox = ByteArray(4)
+        raf.readFully(fullBox)
+        val version = fullBox[0].toInt() and 0xff
+        var pos = seigOffset + 4
+        raf.seek(pos)
+        val fields = ByteArray(16)
+        raf.readFully(fields)
+        var cursor = 0
+        if (version >= 1) cursor += 4 // default_length
+        val entryCount = be32(fields, cursor)
+        cursor += 4
+        if (entryCount <= 0) return null
+        if (version >= 1 && be32(fields, 0) == 0) cursor += 4 // description_length
+        raf.seek(pos + cursor)
+        val entry = ByteArray(20)
+        raf.readFully(entry)
+        entry.copyOfRange(4, 20)
+    }.getOrNull()
+}
+
+private fun indexOf(haystack: ByteArray, needle: ByteArray, from: Int): Int {
+    if (needle.isEmpty() || from > haystack.size - needle.size) return -1
+    for (i in from..haystack.size - needle.size) {
+        if (haystack.copyOfRange(i, i + needle.size).contentEquals(needle)) return i
+    }
+    return -1
+}
+
+internal fun hex(bytes: ByteArray): String =
+    bytes.joinToString("") { (it.toInt() and 0xff).toString(16).padStart(2, '0') }
+
 private fun uuidBytes(uuid: UUID): ByteArray {
     val high = uuid.mostSignificantBits
     val low = uuid.leastSignificantBits
@@ -215,6 +334,8 @@ private fun putBe32(bytes: ByteArray, at: Int, value: Int) {
 }
 
 private val PSH_TAG = byteArrayOf(0x70, 0x73, 0x73, 0x68) // 'pssh'
+private val TENC_TAG = byteArrayOf(0x74, 0x65, 0x6e, 0x63) // 'tenc'
+private val SEIG_TAG = byteArrayOf(0x73, 0x65, 0x69, 0x67) // 'seig'
 private fun be32(bytes: ByteArray, at: Int): Int =
     ((bytes[at].toInt() and 0xff) shl 24) or
         ((bytes[at + 1].toInt() and 0xff) shl 16) or

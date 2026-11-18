@@ -63,6 +63,8 @@ object MorneyePackageManager {
     private const val PREFS_REGISTRY = "mornye_registry"
     /** Per-track CENC keys, so a cached encrypted file still plays next launch. */
     private const val PREFS_DECRYPTION_KEY = "mornye_dk_"
+    /** Where the encrypted file behind a saved key lives, for KID inspection. */
+    private const val PREFS_CACHED_FILE = "mornye_cf_"
 
     private lateinit var context: Context
     private lateinit var prefs: SharedPreferences
@@ -566,13 +568,35 @@ object MorneyePackageManager {
         return prefs.getString(decryptionPrefKey(configId, trackId), null)?.trim()?.ifBlank { null }
     }
 
+    /**
+     * Remember the cached MP4 that goes with a saved CENC key. The player needs
+     * its track-encryption KID, which is often not one of the PSSH KIDs.
+     */
+    fun rememberCachedFile(configId: String, trackId: String, path: String) {
+        if (!::prefs.isInitialized || configId.isBlank() || trackId.isBlank() || path.isBlank()) return
+        prefs.edit().putString(cachedFilePrefKey(configId, trackId), path).apply()
+    }
+
+    fun cachedFileFor(configId: String?, trackId: String?): File? {
+        if (!::prefs.isInitialized || configId.isNullOrBlank() || trackId.isNullOrBlank()) return null
+        val path = prefs.getString(cachedFilePrefKey(configId, trackId), null)?.trim() ?: return null
+        val file = File(path)
+        return file.takeIf { it.isFile && it.length() > 0 }
+    }
+
     fun clearDecryptionKey(configId: String, trackId: String) {
         if (!::prefs.isInitialized) return
-        prefs.edit().remove(decryptionPrefKey(configId, trackId)).apply()
+        prefs.edit()
+            .remove(decryptionPrefKey(configId, trackId))
+            .remove(cachedFilePrefKey(configId, trackId))
+            .apply()
     }
 
     private fun decryptionPrefKey(configId: String, trackId: String): String =
         PREFS_DECRYPTION_KEY + sha256((configId + "|" + trackId).toByteArray(Charsets.UTF_8))
+
+    private fun cachedFilePrefKey(configId: String, trackId: String): String =
+        PREFS_CACHED_FILE + sha256((configId + "|" + trackId).toByteArray(Charsets.UTF_8))
 }
 
 class MorneyeInstallException(message: String) : Exception(message)

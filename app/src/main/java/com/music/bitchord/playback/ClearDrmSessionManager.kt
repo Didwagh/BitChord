@@ -76,9 +76,10 @@ private class DeferredAddonDrmSessionManager(
     private fun resolve(): DrmSessionManager = synchronized(this) {
         delegate?.let { return@synchronized it }
         val key = MorneyePackageManager.decryptionKeyFor(configId, trackId)
+        val cachedFile = MorneyePackageManager.cachedFileFor(configId, trackId)
         val chosen = if (key != null && clearKeySupported()) {
             TrackLog.d(TAG, "deferred ClearKey ready for ${trackId ?: "unknown track"}")
-            ClearKeyDrmSessionManager(key)
+            ClearKeyDrmSessionManager(key, cachedFile?.absolutePath)
         } else {
             TrackLog.d(
                 TAG,

@@ -7,6 +7,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.io.File
 import java.util.Base64
 
 /** Pure helpers behind ClearKey provisioning: no CDM is needed to test these. */
@@ -74,6 +75,55 @@ class ClearKeyDrmSessionManagerTest {
         assertEquals(1, readBe32(box, 28))
         assertArrayEquals(kid, box.copyOfRange(32, 48))
         assertEquals(0, readBe32(box, 48))
+    }
+
+    @Test
+    fun `keyIdsFromMp4 reads the KID from a tenc box`() {
+        val kid = ByteArray(16) { (0x40 + it).toByte() }
+        val payload = ByteArray(24)
+        payload[6] = 1 // default_IsProtected
+        payload[7] = 8 // per-sample IV
+        kid.copyInto(payload, 8)
+        val box = ByteArray(32)
+        writeBe32(box, 0, box.size)
+        "tenc".toByteArray().copyInto(box, 4)
+        payload.copyInto(box, 8)
+
+        val file = File.createTempFile("bitchord-tenc", ".m4a")
+        try {
+            file.writeBytes(ByteArray(64) + box + ByteArray(128))
+            assertEquals(listOf(kid.toList()), keyIdsFromMp4(file).map { it.toList() })
+        } finally {
+            file.delete()
+        }
+    }
+
+    @Test
+    fun `keyIdsFromMp4 reads the KID from an seig sample group`() {
+        val kid = ByteArray(16) { (0x60 + it).toByte() }
+        val group = ByteArray(36)
+        group[0] = 1 // sgpd version
+        "seig".toByteArray().copyInto(group, 4)
+        writeBe32(group, 8, 20) // default_length
+        writeBe32(group, 12, 1) // entry_count
+        group[18] = 1 // IsProtected
+        group[19] = 8 // Per_Sample_IV_Size
+        kid.copyInto(group, 20)
+
+        val file = File.createTempFile("bitchord-seig", ".m4a")
+        try {
+            file.writeBytes(ByteArray(64) + group + ByteArray(128))
+            assertEquals(listOf(kid.toList()), keyIdsFromMp4(file).map { it.toList() })
+        } finally {
+            file.delete()
+        }
+    }
+
+    private fun writeBe32(bytes: ByteArray, at: Int, value: Int) {
+        bytes[at] = (value ushr 24).toByte()
+        bytes[at + 1] = (value ushr 16).toByte()
+        bytes[at + 2] = (value ushr 8).toByte()
+        bytes[at + 3] = value.toByte()
     }
 
     private fun readBe32(bytes: ByteArray, at: Int): Int =

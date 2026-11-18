@@ -242,6 +242,7 @@ class MorneyeSource(
                             TAG,
                             "[$addonKey] reusing ${file.name} (${file.length()} bytes) for $rawTrackId",
                         )
+                        MorneyePackageManager.rememberCachedFile(configId, rawTrackId, file.absolutePath)
                         MorneyeFailureCooldown.clear(failKey)
                         return@withContext buildStream(file, quality, request, parsed = null)
                     }
@@ -360,6 +361,7 @@ class MorneyeSource(
                         )
                     }
                 }
+                MorneyePackageManager.rememberCachedFile(configId, rawTrackId, file.absolutePath)
                 MorneyeFailureCooldown.clear(failKey)
                 TrackLog.d(
                     TAG,
