@@ -11,7 +11,11 @@ import androidx.media3.exoplayer.drm.DrmSessionEventListener
 import androidx.media3.exoplayer.drm.DrmSessionManager
 import androidx.media3.exoplayer.drm.DrmSessionManagerProvider
 import android.os.Looper
+import com.music.bitchord.data.TrackLog
+import com.music.bitchord.data.sources.SourceRegistry
 import com.music.bitchord.data.sources.mornye.MorneyePackageManager
+
+private const val TAG = "BitChord/DRM"
 
 /**
  * A DRM session manager for items that were never configured for DRM.
@@ -59,10 +63,25 @@ fun clearAwareDrmSessionManagerProvider(): DrmSessionManagerProvider {
             // it ExoPlayer queues encrypted buffers with no crypto object and
             // dies with `queuing secure buffer without mCrypto or mDescrambler`.
             val uri = item.localConfiguration?.uri
-            val configId = uri?.getQueryParameter("s")
-            val trackId = uri?.getQueryParameter("t")
+            val uriConfigId = uri?.getQueryParameter("s")
+            val uriTrackId = uri?.getQueryParameter("t")
+            // The queue's media id is the same (configId, trackId) pair, and it
+            // survives playback URI rewrites that the query parameters do not.
+            // Read it as a fallback rather than trusting one encoding of the
+            // identity: a key stored under the source id must be findable when
+            // the item arrives as a local file.
+            val parsed = SourceRegistry.parseTrackKey(item.mediaId)
+            val configId = uriConfigId ?: parsed?.first
+            val trackId = uriTrackId ?: parsed?.second
             val key = MorneyePackageManager.decryptionKeyFor(configId, trackId)
-            if (key != null && clearKeySupported()) {
+            val supported = clearKeySupported()
+            TrackLog.d(
+                TAG,
+                "select: mediaId=${item.mediaId}, uriScheme=${uri?.scheme}, " +
+                    "uriAuthority=${uri?.authority}, keyParams=${uriConfigId != null && uriTrackId != null}, " +
+                    "keyFound=${key != null}, clearKeySupported=$supported",
+            )
+            if (key != null && supported) {
                 ClearKeyDrmSessionManager(key)
             } else {
                 ClearDrmSessionManager
