@@ -180,6 +180,22 @@ object MorneyePackageManager {
         if (!enabled) closeRuntime(key)
     }
 
+    /**
+     * Sets which addon is asked first when more than one can answer a search.
+     *
+     * The installed list *is* the persisted order: [persistPackages] writes it
+     * as an ordered JSON array, `SourceRegistry.syncMorneyePackages` maps it
+     * into same-rank SourceConfig rows, and the registry's stable rank sort
+     * keeps that order in `active()`. No separate rank field — and no separate
+     * order preference — to drift out of step with the list.
+     */
+    fun reorderPackages(orderedKeys: List<String>) {
+        val updated = orderInstalledPackages(_packages.value, orderedKeys)
+        if (updated.map { it.key } == _packages.value.map { it.key }) return
+        persistPackages(updated)
+        _packages.value = updated
+    }
+
     fun remove(key: String) {
         closeRuntime(key)
         synchronized(runtimeLock) { sessions.remove(key) }
@@ -508,6 +524,22 @@ object MorneyePackageManager {
     }
 
     // ── Utilities ─────────────────────────────────────────────────────────
+
+    /**
+     * [packages] in [orderedKeys] order. Keys that name a missing addon are
+     * ignored and addons the caller forgot are appended in their existing
+     * order, so a list that moved on since the user opened the screen reorders
+     * what it can instead of dropping an addon installed in the meantime.
+     */
+    internal fun orderInstalledPackages(
+        packages: List<InstalledMorneyePackage>,
+        orderedKeys: List<String>,
+    ): List<InstalledMorneyePackage> {
+        val byKey = packages.associateBy { it.key }
+        val moved = orderedKeys.mapNotNull(byKey::get)
+        val movedKeys = moved.map { it.key }.toSet()
+        return moved + packages.filterNot { it.key in movedKeys }
+    }
 
     /** Stable per-addon storage key: SHA-1 of "spotiflac:<name>", first 10 hex chars. */
     fun keyOf(name: String): String {

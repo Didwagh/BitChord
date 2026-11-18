@@ -203,7 +203,10 @@ class PoTokenWebView private constructor(
      */
     @JavascriptInterface
     fun onRunBotguardResult(botguardResponse: String) {
-        TrackLog.d(TAG, "botguardResponse: $botguardResponse")
+        // The response is a short-lived Botguard token, not a diagnostic: log
+        // only its size so a failure can still be told from an empty answer
+        // without putting credential material in an exported log.
+        TrackLog.d(TAG, "botguardResponse: ${botguardResponse.length} chars")
         makeBotguardServiceRequest(
             "https://www.youtube.com/api/jnn/v1/GenerateIT",
             "[ \"$REQUEST_KEY\", \"$botguardResponse\" ]",

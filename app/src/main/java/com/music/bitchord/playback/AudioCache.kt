@@ -26,6 +26,7 @@ import com.music.bitchord.data.innertube.StreamResolver
 import com.music.bitchord.data.model.Song
 import com.music.bitchord.data.settings.AppSettings
 import com.music.bitchord.data.sources.DeviceCodecs
+import com.music.bitchord.data.sources.ModuleSource
 import com.music.bitchord.data.sources.SourceKind
 import com.music.bitchord.data.sources.SourceRegistry
 import com.music.bitchord.data.sources.SourceResolver
@@ -794,9 +795,21 @@ object AudioCache {
                 has(META_PLAYBACK) == usedByPlayback &&
                 (usedByPlayback || has(META_ANALYSIS)) &&
                 has(META_PLAYED) == played
+            // Replay from Cached songs rebuilds the Song from this metadata.
+            // Without the mix/quality marker it would build a different
+            // `bitchord://source?...` URI, miss the entry holding the bytes we
+            // are filling now, and re-resolve the track — possibly as another
+            // rendition. Back-fill those fields on entries written before they
+            // existed; the rest of the tag is unchanged.
+            val wantsExplicit = song?.isExplicit
+            val missingReplayFields =
+                (spec.uri.getQueryParameter(SourceResolver.MIX_PARAM) != null && !has(META_MIX)) ||
+                    (song?.sourceQuality?.isNotBlank() == true && !has(META_SOURCE_QUALITY)) ||
+                    (wantsExplicit != null && !has(META_EXPLICIT)) ||
+                    (song?.isVideo == true && !has(META_VIDEO))
             // Every re-open — a seek, a continuation fetch — passes through
             // here. Only write when something would actually change.
-            if (tagged && (song == null || has(META_TITLE))) return
+            if (tagged && (song == null || has(META_TITLE)) && !missingReplayFields) return
             cache.applyContentMetadataMutations(
                 key,
                 ContentMetadataMutations().also { mutations ->
@@ -848,6 +861,19 @@ object AudioCache {
         album?.takeIf { it.isNotBlank() }?.let { mutations.set(META_ALBUM, it) }
         duration?.takeIf { it.isNotBlank() }?.let { mutations.set(META_DURATION, it) }
         song?.thumbnailUrl?.takeIf { it.isNotBlank() }?.let { mutations.set(META_ART, it) }
+        // Everything [cachedSongs] needs to rebuild the exact playback URI —
+        // especially `mix`, which decides whether this stereo FLAC is asked for
+        // again or a different rendition is resolved on replay.
+        song?.sourceQuality?.takeIf(String::isNotBlank)
+            ?.let { mutations.set(META_SOURCE_QUALITY, it) }
+        uri?.getQueryParameter(SourceResolver.MIX_PARAM)?.takeIf(String::isNotBlank)
+            ?.let { mutations.set(META_MIX, it) }
+        (song?.isExplicit ?: uri?.getQueryParameter("e")?.let { it == "1" })?.let {
+            mutations.set(META_EXPLICIT, if (it) "1" else "0")
+        }
+        if (song?.isVideo == true || uri?.getQueryParameter("m") == "1") {
+            mutations.set(META_VIDEO, "1")
+        }
     }
 
     /**
@@ -893,6 +919,20 @@ object AudioCache {
             val origin = entries.maxBy { it.bytes }.origin
             val complete = entries.any { it.complete }
             val noted = notedSongs[mediaId]
+            // The entry holding most of the bytes is the rendition this row is
+            // for. Its replay fields must travel with the row: the URI built in
+            // PlayerConnection.toMediaItem derives `mix` from sourceQuality, and
+            // AudioCache.keyFactory includes that mix in the cache key. Dropping
+            // it here sent a cached stereo FLAC down an `mix=any` key, where the
+            // resolver was free to pick another rendition — the "cached replay
+            // became Opus" report.
+            val primary = entries.maxBy { it.bytes }
+            fun primaryField(name: String): String? =
+                primary.meta.get(name, null as String?)?.takeIf(String::isNotBlank)
+            val replayQuality = replaySourceQuality(
+                primaryField(META_SOURCE_QUALITY),
+                primaryField(META_MIX),
+            )
             val art = field(META_ART) ?: noted?.thumbnailUrl
                 ?: mediaId.takeIf { SourceRegistry.parseTrackKey(it) == null }
                     ?.let { "https://i.ytimg.com/vi/$it/hqdefault.jpg" }
@@ -904,6 +944,9 @@ object AudioCache {
                     thumbnailUrl = art,
                     durationText = field(META_DURATION) ?: noted?.durationText,
                     albumName = field(META_ALBUM) ?: noted?.albumName,
+                    sourceQuality = replayQuality,
+                    isExplicit = primaryField(META_EXPLICIT)?.let { it == "1" },
+                    isVideo = primaryField(META_VIDEO) == "1",
                     // The row's second line: where the copy came from, what
                     // it costs on disk, and — when only part of it is there —
                     // that it will need a connection to play to the end.
@@ -1174,6 +1217,23 @@ object AudioCache {
             Origin.OTHER -> "Addon"
         }
 
+    /**
+     * The quality marker a cached row must carry so its replay asks for the
+     * same rendition whose bytes it already owns.
+     *
+     * A row cached before these fields existed has only the `mix` query the
+     * player used. Mapping it back to a quality marker is enough: [SourceResolver.mixOf]
+     * only distinguishes Atmos, stereo and "unmarked". `"Stereo"` is a plain
+     * mix description, never a lossless claim — the bytes and decoder still
+     * decide what the track actually is.
+     */
+    internal fun replaySourceQuality(quality: String?, mix: String?): String? = quality
+        ?: when (mix) {
+            SourceResolver.MIX_ATMOS -> ModuleSource.DOLBY
+            SourceResolver.MIX_STEREO -> "Stereo"
+            else -> null
+        }
+
     private fun formatBytes(bytes: Long): String {
         val mb = bytes / (1024.0 * 1024.0)
         return if (mb >= 1024) "%.1f GB".format(Locale.ROOT, mb / 1024) else "%.1f MB".format(Locale.ROOT, mb)
@@ -1186,6 +1246,12 @@ object AudioCache {
     private const val META_ALBUM = "bc_album"
     private const val META_DURATION = "bc_duration"
     private const val META_ART = "bc_art"
+
+    /** The picked row's quality and mix, needed to rebuild its exact playback URI. */
+    private const val META_SOURCE_QUALITY = "bc_source_quality"
+    private const val META_MIX = "bc_mix"
+    private const val META_EXPLICIT = "bc_explicit"
+    private const val META_VIDEO = "bc_video"
 
     /** Set once a non-analysis request — the player or its read-ahead — has read this entry. */
     private const val META_PLAYBACK = "bc_playback"

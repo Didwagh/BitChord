@@ -20,6 +20,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -169,6 +170,12 @@ fun MorneyeScreen(
         // ── Installed packages ────────────────────────────────────────────
         item {
             SectionHeader("Installed add-ons")
+            Text(
+                "Top to bottom is the order they are asked in. Tap one for priority controls.",
+                modifier = Modifier.padding(horizontal = 20.dp, vertical = 4.dp),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
         }
 
         if (packages.isEmpty()) {
@@ -181,12 +188,25 @@ fun MorneyeScreen(
                 )
             }
         } else {
-            items(packages, key = { it.key }) { pkg ->
+            // One addon per row: the list is the priority order. Moving a row
+            // rewrites that order and flows straight into SourceRegistry's
+            // same-rank source list, so no separate rank has to be kept in step.
+            fun moveAddon(from: Int, to: Int) {
+                if (from !in packages.indices || to !in packages.indices) return
+                val keys = packages.map { it.key }.toMutableList()
+                keys.add(to, keys.removeAt(from))
+                MorneyePackageManager.reorderPackages(keys)
+            }
+            itemsIndexed(packages, key = { _, pkg -> pkg.key }) { index, pkg ->
                 InstalledAddonRow(
                     pkg     = pkg,
                     busy    = pkg.key in busyKeys,
                     requiresSession = pkg.key in signedKeys,
                     sessionStatus = sessionStatuses[pkg.key],
+                    canMoveUp = index > 0,
+                    canMoveDown = index < packages.lastIndex,
+                    onMoveUp = { moveAddon(index, index - 1) },
+                    onMoveDown = { moveAddon(index, index + 1) },
                     onToggle = { MorneyePackageManager.setEnabled(pkg.key, it) },
                     onRemove = {
                         scope.launch {
@@ -367,6 +387,10 @@ private fun InstalledAddonRow(
     busy: Boolean,
     requiresSession: Boolean,
     sessionStatus: MorneyeSignedSessionStatus?,
+    canMoveUp: Boolean,
+    canMoveDown: Boolean,
+    onMoveUp: () -> Unit,
+    onMoveDown: () -> Unit,
     onToggle: (Boolean) -> Unit,
     onRemove: () -> Unit,
     onConnect: () -> Unit,
@@ -426,6 +450,21 @@ private fun InstalledAddonRow(
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
+
+                Spacer(Modifier.height(10.dp))
+                Text(
+                    "Priority — asked first when several addons have the song.",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    TextButton(onClick = onMoveUp, enabled = canMoveUp && !busy) {
+                        Text("Move up")
+                    }
+                    TextButton(onClick = onMoveDown, enabled = canMoveDown && !busy) {
+                        Text("Move down")
+                    }
+                }
 
                 if (requiresSession) {
                     Spacer(Modifier.height(12.dp))
