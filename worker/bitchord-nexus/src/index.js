@@ -9,8 +9,8 @@
 const MANIFEST = {
   id: 'com.bitchord.nexus',
   name: 'Nexus',
-  version: '1.7.1',
-  resources: ['search', 'stream', 'download_url'],
+  version: '1.8.0',
+  resources: ['search', 'stream', 'download_url', 'addon_qobuz'],
   allowDownloads: 1,
   settings: [{
     key: 'quality', type: 'select', default: 'lossless',
@@ -196,7 +196,7 @@ function relevanceFilter(query, tracks) {
     );
     const overlap = qTokens.filter(w => haystackTokens.has(w)).length;
     if (overlap < MIN_OVERLAP) {
-      log('FILTER', `dropped "${t.title}" — "${t.artist}" (overlap ${overlap}/${qTokens.length})`);
+      log('FILTER', `dropped titleChars=${str(t.title).length} artistChars=${str(t.artist).length} overlap=${overlap}/${qTokens.length}`);
       return false;
     }
     return true;
@@ -307,6 +307,99 @@ async function qbDownloadUrl(trackId, quality) {
     ...(sampleRate > 0 ? { sampling_rate: sampleRate } : {}),
     quality: fmt,
   };
+}
+
+// ── Standalone .sflx addon API ────────────────────────────────────────────────
+// A stock Mornye host can install a `.sflx` whose manifest omits `signedSession`.
+// That addon has no zarz credentials of its own: it asks this Worker for catalog
+// rows and signed download URLs. Only the Worker holds provider config/secrets.
+//
+// These mappers deliberately state catalog resolutions, never a codec claim.
+// `audio_quality` is like qobuz-web's own label ("24bit/96kHz") and is omitted
+// unless the upstream actually states both numbers. Codec and final bit depth
+// are decided by the downloaded bytes and the decoder on the device.
+function qbAddonTrack(raw) {
+  if (!raw || !raw.id) return null;
+  const id = String(raw.id).trim();
+  if (!/^\d+$/.test(id)) return null;
+
+  const title = str(raw.title || raw.name).trim();
+  if (!title) return null;
+
+  const performer = raw.performer || raw.artist || {};
+  const artist = str(typeof performer === 'string'
+    ? performer
+    : (performer.name || '')).trim();
+
+  const album = raw.album || {};
+  const albumName = str(album.title || album.name || '').trim();
+  const image = album.image || {};
+  const artwork = abs(
+    image.large || image.xlarge || image.medium || image.small || album.cover || ''
+  );
+
+  const durationMsRaw = Number(raw.duration_ms || 0);
+  const durationSec   = Number(raw.duration || 0);
+  const durationMs    = durationMsRaw > 0
+    ? Math.round(durationMsRaw)
+    : (durationSec > 0 ? Math.round(durationSec * 1000) : 0);
+
+  const bitDepthRaw = Number(raw.maximum_bit_depth || 0);
+  const sampleRaw   = Number(raw.maximum_sampling_rate || 0);
+  const sampleHz    = sampleRaw > 0 && sampleRaw < 1000
+    ? Math.round(sampleRaw * 1000)
+    : sampleRaw;
+  const sampleDisplay = sampleHz > 0
+    ? (sampleHz % 1000 === 0 ? String(sampleHz / 1000) : (sampleHz / 1000).toFixed(1))
+    : '';
+
+  return {
+    id,
+    item_type: 'track',
+    name: title,
+    artists: artist,
+    album_name: albumName,
+    duration_ms: durationMs,
+    cover_url: artwork,
+    isrc: str(raw.isrc || ''),
+    qobuz_id: id,
+    ...(bitDepthRaw > 0 && sampleDisplay
+      ? { audio_quality: `${bitDepthRaw}bit/${sampleDisplay}kHz` }
+      : {}),
+  };
+}
+
+function qbAddonItems(payload) {
+  if (!payload) return [];
+  if (Array.isArray(payload)) return payload;
+  return payload?.data?.tracks?.items ?? payload?.tracks?.items ?? [];
+}
+
+async function qbAddonSearch(query, limit) {
+  const n = Math.min(Math.max(Number(limit) || 20, 1), 50);
+  const d = await qbGet(`/api/get-music?q=${encodeURIComponent(query)}&offset=0`);
+  const items = qbAddonItems(d);
+  if (!Array.isArray(items)) return [];
+
+  const tracks = [];
+  for (const raw of items) {
+    const track = qbAddonTrack(raw);
+    if (track) tracks.push(track);
+    if (tracks.length >= n) break;
+  }
+  log('QB-ADDON', `search chars=${query.length} → ${tracks.length} tracks`);
+  return tracks;
+}
+
+async function qbAddonTrackById(trackId) {
+  const d = await qbGet(`/api/get-music?q=${encodeURIComponent(trackId)}&offset=0`);
+  const items = qbAddonItems(d);
+  if (!Array.isArray(items)) return null;
+  for (const raw of items) {
+    if (String(raw?.id || '') === trackId) return qbAddonTrack(raw);
+  }
+  log('QB-ADDON', `track lookup idChars=${trackId.length} not found`);
+  return null;
 }
 
 // ── Monochrome (mc:) — streams routed through HF (shared ID space) ────────────
@@ -462,7 +555,7 @@ async function lwFetch(url, intent = 'stream') {
     const sigBuf    = await crypto.subtle.sign('HMAC', cryptoKey, new TextEncoder().encode(message));
     signHex = Array.from(new Uint8Array(sigBuf)).map(b => b.toString(16).padStart(2, '0')).join('');
   } catch (e) {
-    log('LW', `HMAC sign failed: ${e.message} — request may return decoy`);
+    log('LW', `HMAC sign failed (${e.name}) — request may return decoy`);
   }
 
   const headers = {
@@ -481,7 +574,7 @@ async function lwFetch(url, intent = 'stream') {
     if (!r.ok) return null;
     return JSON.parse(raw);
   } catch (e) {
-    log('LW', `✗ ${e.name === 'TimeoutError' ? `timeout after ${TIMEOUT}ms` : e.message}`);
+    log('LW', `✗ ${e.name === 'TimeoutError' ? `timeout after ${TIMEOUT}ms` : e.name}`);
     return null;
   }
 }
@@ -528,7 +621,7 @@ async function lwStream(upId, quality) {
   const d = await lwFetch(`${cfg.LW}stream/${upId}?quality=${encodeURIComponent(quality)}`, 'stream');
   const url = d?.url ?? d?.streamUrl ?? d?.directUrl ?? d?.data?.url;
   if (!url?.startsWith('https://')) {
-    if (d) log('LW', `stream: no url. keys: ${Object.keys(d).join(', ')}`);
+    if (d) log('LW', `stream: no url. keyCount=${Object.keys(d).length}`);
     return null;
   }
   // Reject prank / decoy streams the server might return for unsigned requests
@@ -598,7 +691,7 @@ async function axStream(upId, quality) {
   const d   = await getJSON('AX', `${cfg.AX}stream/${upId}?quality=${encodeURIComponent(quality)}`);
   const url = d?.url;
   if (!url?.startsWith('https://')) {
-    if (d) log('AX', `stream: no url. keys: ${Object.keys(d).join(', ')}`);
+    if (d) log('AX', `stream: no url. keyCount=${Object.keys(d).length}`);
     return null;
   }
   if (d.encrypted === true) { log('AX', 'encrypted — refusing'); return null; }
@@ -648,7 +741,7 @@ function qualityScore(t) {
 
 // ── Search & Stream ───────────────────────────────────────────────────────────
 async function doSearch(q, quality) {
-  log('SEARCH', `query="${q}" quality=${quality}`);
+  log('SEARCH', `queryChars=${q.length} quality=${quality}`);
   const [ax, lw, qb, mc, hf] = await Promise.allSettled([
     axSearch(q, quality),   // Aurix — Tidal/Qobuz/Deezer with real creds
     lwSearch(q, quality),   // LastWave — TIDAL via HiFi network
@@ -693,7 +786,7 @@ async function doSearch(q, quality) {
 }
 
 async function doStream(id, quality) {
-  log('STREAM', `id="${id}" quality=${quality}`);
+  log('STREAM', `idChars=${id.length} quality=${quality}`);
   const colon  = id.indexOf(':');
   if (colon < 0) return null;
   const prefix = id.slice(0, colon);
@@ -710,7 +803,7 @@ async function doStream(id, quality) {
 
   // Authenticity guard: reject decoy streams even if they slipped through
   if (isDecoy(result.url)) {
-    log('STREAM', `decoy URL rejected for id=${id} — source returned prank audio`);
+    log('STREAM', `decoy URL rejected for idChars=${id.length} — source returned prank audio`);
     return null;
   }
 
@@ -763,7 +856,7 @@ async function handle(request, env) {
         const r = await fetch(url, { signal: AbortSignal.timeout(5000), headers: HDRS });
         return { ok: r.ok, status: r.status };
       } catch (e) {
-        return { ok: false, status: e.name === 'TimeoutError' ? 'timeout' : e.message };
+        return { ok: false, status: e.name === 'TimeoutError' ? 'timeout' : e.name };
       }
     };
     const [ax, lw, qbP, qbF, mc, hf] = await Promise.all([
@@ -776,9 +869,9 @@ async function handle(request, env) {
     ]);
     const status = {
       ok: true,
-      version: '1.7.1',
+      version: '1.8.0',
       ts: Date.now(),
-      routes: { downloadUrl: true },
+      routes: { downloadUrl: true, addonQobuz: true },
       providers: { ax, lw, qb_primary: qbP, qb_fallback: qbF, mc, hf },
     };
     log('REQ', `◀ 200 health ax=${ax.status} lw=${lw.status} qb-p=${qbP.status} qb-f=${qbF.status} mc=${mc.status} hf=${hf.status} (${Date.now() - start}ms)`);
@@ -801,6 +894,50 @@ async function handle(request, env) {
     cacheSet(key, tracks, 600_000);
     log('REQ', `◀ 200 search "${q}" → ${tracks.length} tracks (${Date.now() - start}ms)`);
     return json(200, { tracks });
+  }
+
+  // /qobuz/search?q=...&limit=... — catalog rows for the standalone .sflx addon.
+  // Only Qobuz data is returned here; the worker's multi-provider /search route
+  // remains for BitChord's own source list. An addon must not silently pick a
+  // Tidal or LastWave result while wearing a Qobuz badge.
+  if (pathname === '/qobuz/search') {
+    const query = (searchParams.get('q') ?? '').trim();
+    if (!query) return json(200, { tracks: [] });
+    const limit = Number(searchParams.get('limit') ?? 20) || 20;
+    const key = `qa:s:${query}:${limit}`;
+    const cached = cacheGet(key);
+    if (cached) {
+      log('QB-ADDON', `200 search chars=${query.length} [CACHE] (${Date.now() - start}ms)`);
+      return json(200, { tracks: cached });
+    }
+    const tracks = await qbAddonSearch(query, limit);
+    cacheSet(key, tracks, 600_000);
+    log('QB-ADDON', `200 search chars=${query.length} → ${tracks.length} (${Date.now() - start}ms)`);
+    return json(200, { tracks });
+  }
+
+  // /qobuz/track/:id — fallback when the addon has no remembered search row.
+  const qt = pathname.match(/^\/qobuz\/track\/([^/]+)$/);
+  if (qt) {
+    const trackId = decodeURIComponent(qt[1]);
+    if (!/^\d+$/.test(trackId)) {
+      log('QB-ADDON', `400 invalid id chars=${trackId.length} (${Date.now() - start}ms)`);
+      return json(400, { error: 'invalid track id' });
+    }
+    const key = `qa:t:${trackId}`;
+    const cached = cacheGet(key);
+    if (cached) {
+      log('QB-ADDON', `200 track idChars=${trackId.length} [CACHE] (${Date.now() - start}ms)`);
+      return json(200, { track: cached });
+    }
+    const track = await qbAddonTrackById(trackId);
+    if (!track) {
+      log('QB-ADDON', `404 track idChars=${trackId.length} (${Date.now() - start}ms)`);
+      return json(404, { error: 'track not found' });
+    }
+    cacheSet(key, track, 600_000);
+    log('QB-ADDON', `200 track idChars=${trackId.length} (${Date.now() - start}ms)`);
+    return json(200, { track });
   }
 
   // /download-url/:id?quality=hi96|hi24|flac

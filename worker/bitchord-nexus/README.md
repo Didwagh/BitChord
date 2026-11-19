@@ -1,37 +1,41 @@
 # BitChord Nexus — Cloudflare Worker
 
-A sanitized variant of the personal Nexus worker, with one added route that
-matches the `qobuz-web` addon's built-in `customEndpoint` setting.
+Two deliverables live here:
 
-No app source change is required: this proves the Worker idea using addon
-configuration only.
+1. `src/index.js` — the personal Cloudflare Worker. It holds provider config and
+   secrets, and exposes a small API for Qobuz search and lossless download URLs.
+2. `addon/qobuz-worker/` — a standalone `.sflx` addon that installs in a stock
+   Mornye-compatible app. It has **no** `signedSession`, no fork-only settings,
+   and no credentials of its own. It calls the Worker for everything.
+
+## Worker API
+
+| Route | Purpose |
+| --- | --- |
+| `GET /health` | Version and provider status summaries only |
+| `GET /qobuz/search?q=...&limit=...` | Qobuz catalog rows in stock addon shape |
+| `GET /qobuz/track/:id` | One remembered row, or a fresh catalog lookup |
+| `GET /download-url/:id?quality=hi96\|hi24\|flac` | Signed HTTPS download URL |
+| `GET /search`, `GET /stream/:id` | Existing BitChord multi-provider routes |
+
+Quality mapping on `/download-url`:
+
+- `hi96` → Qobuz format `27` (24-bit hi-res)
+- `hi24` → Qobuz format `7` (24-bit)
+- `flac` → Qobuz format `6` (16-bit CD lossless) — **never** the MP3 rung
+
+`/qobuz/search` returns only Qobuz rows, never a Tidal/LastWave result wearing
+a Qobuz badge. Catalog fields are copied only when the upstream states them.
+The downloaded bytes and the device decoder still decide the real codec,
+bit depth and sample rate.
 
 ## What changed from the downloaded reference
 
-- Added `GET /download-url/{id}?quality=hi96|hi24|flac`.
-  - `hi96` → Qobuz format `27` (24-bit hi-res)
-  - `hi24` → Qobuz format `7` (24-bit)
-  - `flac` → Qobuz format `6` (16-bit CD lossless) — **never** the MP3 rung
-- Added `/health.routes.downloadUrl` and bumped worker version to `1.7.1`.
+- Added the standalone addon API above and bumped the worker to `1.8.0`.
 - Removed hard-coded provider URLs and the built-in LastWave signing secret.
-  `LW_SECRET` must now come from Worker config.
+  Provider values live in Worker Variables/Secrets, not in source.
 - Rewrote logging so it never emits full URLs, URL prefixes, query strings,
-  response bodies, tokens, secrets, or signed paths.
-
-The response shape is exactly what `qobuz-web/index.js:2717-2751`
-(`parseDownloadInfo`) expects:
-
-```json
-{
-  "url": "https://...",
-  "bit_depth": 24,
-  "sampling_rate": 96000,
-  "quality": 27
-}
-```
-
-Only fields the upstream actually states are included. The Android app still
-decides the real codec from the downloaded bytes and the decoder.
+  response bodies, tokens, secrets, signed paths, titles or search text.
 
 ## Deploy
 
@@ -54,19 +58,46 @@ Check the result:
 curl https://bitchord-nexus.<subdomain>.workers.dev/health
 ```
 
-Expected: `"version":"1.7.1"` and `"routes":{"downloadUrl":true}`.
+Expected: `"version":"1.8.0"`,
+`"routes":{"downloadUrl":true,"addonQobuz":true}`.
 
-## Connect the Qobuz addon
+### Important: preserve bindings on API upload
 
-In BitChord → Addons → Qobuz → settings:
+A raw `PUT /workers/scripts/bitchord-nexus` that only sends `index.js` will
+**remove every existing binding**. When deploying through the Cloudflare API,
+first `GET .../scripts/bitchord-nexus/settings`, reuse the `bindings` array from
+that response in the upload metadata, then upload the module. Never print or
+commit those values.
 
-- **Custom download endpoint**: `https://bitchord-nexus.<subdomain>.workers.dev`
-- **Custom endpoint API key**: leave empty unless you add one yourself
+## Standalone addon (stock app)
 
-The addon calls `{endpoint}/download-url/{id}?quality=...` before its default
-download providers. Search and metadata still use the addon's existing paths.
-That is intentional for this first proof: it isolates download resolution and
-health from the session question.
+Source: `addon/qobuz-worker/{manifest.json,index.js}`.
+
+Build and install:
+
+```sh
+cd addon/qobuz-worker
+zip -q -X bitchord-qobuz-worker.sflx manifest.json index.js
+```
+
+Install `bitchord-qobuz-worker.sflx` in the stock app's addon/extension screen.
+There is no Connect/verification step and nothing to paste. The addon's only
+setting is the Worker URL, which already defaults to the live personal Worker.
+
+What the addon does:
+
+- `customSearch`/`searchTracks` call `/qobuz/search`;
+- `download` calls `/download-url/...` with a lossless-only fallback chain;
+- decoder-measured `bit_depth`, `sample_rate` and `format` are reported when the
+  host provides them; when it does not, they are omitted rather than guessed;
+- preview/short downloads are rejected rather than cached as full tracks.
+
+### Legacy fork-only route
+
+If an older BitChord fork already has `qobuz-web` installed, its **Custom
+download endpoint** can also be pointed at the Worker root. That route still
+exists for compatibility, but the standalone addon above is the intended
+deliverable because it needs no fork.
 
 ## Local checks
 
@@ -74,13 +105,12 @@ health from the session question.
 npm test
 ```
 
-The test mocks upstream Qobuz with a fake URL containing a fake signature and
-asserts:
+`node --test` runs both suites:
 
-- `hi96`, `hi24`, and `flac` map to `27`, `7`, and `6`;
-- the returned JSON has the addon's expected field names;
-- no emitted log line contains the fake signed URL, its query string, or a URL
-  prefix.
+- Worker tests mock upstream Qobuz and assert quality mapping, response shape,
+  and that a fake signed URL never reaches a log line.
+- Addon tests run the `.sflx` JavaScript in a VM with mocked host globals and
+  assert stock contract fields, lossless-only fallback, and leak-free logs.
 
 ## Logs
 
