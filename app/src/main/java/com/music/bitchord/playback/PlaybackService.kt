@@ -3967,14 +3967,23 @@ class PlaybackService : MediaLibraryService() {
         convertVideosAround(exoPlayer)
         prefetchAround(exoPlayer)
         // The second look belongs to the track it was started for; the
-        // queue moving on ends it — unless it is already proving what it
-        // found, see [cancelStaleUpgradeJob] — and starts the new
+        // queue moving on retires it rather than throwing away a result it
+        // may already have found, see [UpgradeJobSlots], and starts the new
         // track's own, which nothing else here would. The
         // track arriving has usually been resolved already, by
         // ExoPlayer preparing the next item while this one played, so
         // it is pending by now; the ones that aren't are picked up by
         // the sampler in [reportProgress].
-        cancelStaleUpgradeJob()
+        val outgoingUpgradeFor = upgradeJobs.currentFor
+        val outgoingUpgradeActive = upgradeJobs.current?.isActive == true
+        upgradeJobs.retire()
+        if (outgoingUpgradeActive && outgoingUpgradeFor != null) {
+            TrackLog.d(
+                "BitChord",
+                "keeping the quality search for $outgoingUpgradeFor across the track change",
+                about = outgoingUpgradeFor,
+            )
+        }
         lookForBetterCopy(exoPlayer)
         // Covers crossfades too: a blended advance never reaches
         // onMediaItemTransition, and [adoptPlayer] calls this handler by hand.
@@ -3983,34 +3992,20 @@ class PlaybackService : MediaLibraryService() {
         if (exoPlayer.isPlaying) startLyricsTicker()
     }
 
-    /** The background hunt for a better copy of whatever is playing. */
-    private var upgradeJob: Job? = null
-
-    /** Which track [upgradeJob] is hunting for — see [lookForBetterCopy]. */
-    private var upgradeFor: String? = null
-
     /**
-     * Ends [upgradeJob] because the queue has moved on — unless it has already
-     * found a stream and is proving it.
+     * The background hunt for a better copy of whatever is playing, plus the
+     * bounded set of hunts the queue has moved past.
      *
-     * By the audition everything expensive is spent: the catalogue walk, the
-     * stream lookup, and the replacement's first megabytes on disk. [swapIn]
-     * knows what to do when the listener skips out from under it — see the
-     * `now == null` branch there, which parks the proof with
-     * [QualityUpgrade.shelve] so coming back costs nothing — and cancelling the
-     * coroutine is what stopped it ever reaching that. Measured on a skip 66ms
-     * into an audition: the FLAC was found, the fetch was cancelled mid-flight,
-     * and the track played its 320kbps copy for the rest of the session with a
-     * plain "High quality" badge over it, because [QualityUpgrade.lookAgain]
-     * records a search as answered the moment it has a candidate and only
-     * [QualityUpgrade.shelve] takes that back.
-     *
-     * A job still searching has nothing yet worth keeping, and is still cut
-     * short — that is the whole of what this used to do unconditionally.
+     * Cancelling a hunt on every skip used to discard an answer that had
+     * already been found: Bones sat on YouTube Opus while a Qobuz 24-bit FLAC
+     * took two minutes to download; the queue moved on while the upgrade was
+     * still collecting its other sources, and the cancellation threw the FLAC
+     * away before `swapIn` could shelf it. Retiring keeps that result alive —
+     * see [UpgradeJobSlots] — and the existing `now == null` branch in
+     * [swapIn] still decides between a swap and a shelf when it lands.
      */
-    private fun cancelStaleUpgradeJob() {
-        if (QualityUpgrade.isAuditioning(upgradeFor)) return
-        upgradeJob?.cancel()
+    private val upgradeJobs = UpgradeJobSlots { mediaId ->
+        !QualityUpgrade.isAuditioning(mediaId)
     }
 
     /**
@@ -4708,92 +4703,91 @@ class PlaybackService : MediaLibraryService() {
         val alreadyPending = QualityUpgrade.isPending(mediaId)
         val shelved = QualityUpgrade.shelvedFor(mediaId)
         if (shelved == null && !alreadyPending && !QualityUpgrade.couldStillUpgrade(mediaId, uri)) return
-        if (upgradeJob?.isActive == true) {
-            // Already hunting for this track. One left over from a track the
-            // queue has moved past is a different matter: it can only come
-            // back with an answer about a song nobody is listening to, and
-            // until it does it holds the slot the current track needs.
-            //
-            // Unless it is proving a stream it already found, which
-            // [cancelStaleUpgradeJob] leaves alone — the fields below are then
-            // handed to this track while that one runs on unreferenced, which
-            // is all it needs: it carries its own media id and ends itself by
-            // shelving what it proved.
-            if (upgradeFor == mediaId) return
-            cancelStaleUpgradeJob()
+        if (upgradeJobs.isCurrentFor(mediaId)) return
+        // A search for another track keeps running; only the "current" label
+        // moves with the queue. If this track is the one that was skipped past
+        // and its search is still alive, take that one back rather than start
+        // a duplicate hunt that could audition a second answer over the same
+        // bytes. See [UpgradeJobSlots].
+        upgradeJobs.retire()
+        if (upgradeJobs.promoteStale(mediaId)) {
+            TrackLog.d("BitChord", "resuming the quality search already running for $mediaId", about = mediaId)
+            return
         }
-        upgradeFor = mediaId
         if (alreadyPending) {
             TrackLog.d("BitChord", "looking again for a better copy of $mediaId", about = mediaId)
         }
-        upgradeJob = scope.launch(TrackLog.about(mediaId)) {
-            // A previous visit to this track already did all the expensive
-            // parts and lost the swap to a skip. Nothing about the answer has
-            // gone stale — the stream is still parked and its bytes are still
-            // on disk — so this goes straight to the swap and skips the ten
-            // seconds of catalogue searching it would otherwise repeat.
-            if (shelved != null) {
-                TrackLog.d("BitChord", "re-offering the upgrade already proved for $mediaId")
-                NerdStats.onLosslessRaceStart(mediaId)
+        upgradeJobs.start(
+            mediaId,
+            scope.launch(TrackLog.about(mediaId)) {
+                // A previous visit to this track already did all the expensive
+                // parts and lost the swap to a skip. Nothing about the answer has
+                // gone stale — the stream is still parked and its bytes are still
+                // on disk — so this goes straight to the swap and skips the ten
+                // seconds of catalogue searching it would otherwise repeat.
+                if (shelved != null) {
+                    TrackLog.d("BitChord", "re-offering the upgrade already proved for $mediaId")
+                    NerdStats.onLosslessRaceStart(mediaId)
+                    try {
+                        swapIn(mediaId, shelved)
+                    } finally {
+                        NerdStats.onLosslessRaceEnd(mediaId)
+                    }
+                    return@launch
+                }
+                // The runtime the decoder reports is the only measured evidence
+                // about what is playing, and everything downstream weighs
+                // candidates against it — so it is worth a short wait rather than
+                // a null. It is genuinely not known yet at some of the moments
+                // this is called from: a queue advance runs its transition before
+                // the item it moved onto has finished preparing.
+                val playingSeconds = withTimeoutOrNull(DURATION_SETTLE_MS) {
+                    while (true) {
+                        val ms = withContext(Dispatchers.Main) {
+                            this@PlaybackService.player
+                                ?.takeIf { it.currentMediaItem?.mediaId == mediaId }
+                                ?.duration
+                                ?: 0L
+                        }
+                        // Rounded, not truncated: catalogue runtimes are whole
+                        // seconds, and truncating a 225.9s stream to 225 spent up to
+                        // a second of the length tolerance before any candidate was
+                        // weighed.
+                        if (ms > 0) return@withTimeoutOrNull ((ms + 500) / 1000).toInt()
+                        delay(UPGRADE_PROVE_STEP_MS)
+                    }
+                    @Suppress("UNREACHABLE_CODE") null
+                }
+                // Re-asked rather than carried down from above, because the wait
+                // is long enough for the answer to have changed: the resolver runs
+                // on the loader thread and marks a track pending as it opens the
+                // source, which for a track being fetched is precisely what has to
+                // happen before the decoder can report the runtime waited for just
+                // above. Reading the flag from before the wait meant a freshly
+                // resolved track arrived here looking un-resolved, was handed to
+                // the cached-track path, was refused by it for being pending, and
+                // lost its upgrade until the next progress sample came round.
+                if (!QualityUpgrade.isPending(mediaId) &&
+                    (uri == null || !adoptCachedTrack(mediaId, uri, playingSeconds))
+                ) {
+                    return@launch
+                }
+                val better = withContext(Dispatchers.IO) {
+                    QualityUpgrade.lookAgain(mediaId, playingSeconds)
+                } ?: return@launch
                 try {
-                    swapIn(mediaId, shelved)
+                    swapIn(mediaId, better)
                 } finally {
+                    // The badge comes down when the upgrade is done, not when the
+                    // search that found it was — including the deliberate wait in
+                    // [swapIn] before the audio is allowed to be cut. See
+                    // [QualityUpgrade.lookAgain]. In `finally` because a ceiling
+                    // change can still cancel this job, and a cancelled swap has
+                    // to put the badge out as surely as a completed one.
                     NerdStats.onLosslessRaceEnd(mediaId)
                 }
-                return@launch
             }
-            // The runtime the decoder reports is the only measured evidence
-            // about what is playing, and everything downstream weighs
-            // candidates against it — so it is worth a short wait rather than
-            // a null. It is genuinely not known yet at some of the moments
-            // this is called from: a queue advance runs its transition before
-            // the item it moved onto has finished preparing.
-            val playingSeconds = withTimeoutOrNull(DURATION_SETTLE_MS) {
-                while (true) {
-                    val ms = withContext(Dispatchers.Main) {
-                        this@PlaybackService.player
-                            ?.takeIf { it.currentMediaItem?.mediaId == mediaId }
-                            ?.duration
-                            ?: 0L
-                    }
-                    // Rounded, not truncated: catalogue runtimes are whole
-                    // seconds, and truncating a 225.9s stream to 225 spent up to
-                    // a second of the length tolerance before any candidate was
-                    // weighed.
-                    if (ms > 0) return@withTimeoutOrNull ((ms + 500) / 1000).toInt()
-                    delay(UPGRADE_PROVE_STEP_MS)
-                }
-                @Suppress("UNREACHABLE_CODE") null
-            }
-            // Re-asked rather than carried down from above, because the wait
-            // is long enough for the answer to have changed: the resolver runs
-            // on the loader thread and marks a track pending as it opens the
-            // source, which for a track being fetched is precisely what has to
-            // happen before the decoder can report the runtime waited for just
-            // above. Reading the flag from before the wait meant a freshly
-            // resolved track arrived here looking un-resolved, was handed to
-            // the cached-track path, was refused by it for being pending, and
-            // lost its upgrade until the next progress sample came round.
-            if (!QualityUpgrade.isPending(mediaId) &&
-                (uri == null || !adoptCachedTrack(mediaId, uri, playingSeconds))
-            ) {
-                return@launch
-            }
-            val better = withContext(Dispatchers.IO) {
-                QualityUpgrade.lookAgain(mediaId, playingSeconds)
-            } ?: return@launch
-            try {
-                swapIn(mediaId, better)
-            } finally {
-                // The badge comes down when the upgrade is done, not when the
-                // search that found it was — including the deliberate wait in
-                // [swapIn] before the audio is allowed to be cut. See
-                // [QualityUpgrade.lookAgain]. In `finally` because a queue
-                // that moves on cancels this job, and a cancelled swap has to
-                // put the badge out as surely as a completed one.
-                NerdStats.onLosslessRaceEnd(mediaId)
-            }
-        }
+        )
     }
 
     /**
@@ -4831,9 +4825,7 @@ class PlaybackService : MediaLibraryService() {
         // while this track's automatic or manual upgrade was already running.
         // The UI disables the row too, but the service is the authoritative
         // boundary for controllers which do not use that UI.
-        if (mediaId in NerdStats.racingLossless.value ||
-            (upgradeJob?.isActive == true && upgradeFor == mediaId)
-        ) {
+        if (mediaId in NerdStats.racingLossless.value || upgradeJobs.isCurrentFor(mediaId)) {
             TrackLog.d("BitChord", "manual upgrade ignored for $mediaId: upgrade already running", about = mediaId)
             return
         }
@@ -5169,10 +5161,10 @@ class PlaybackService : MediaLibraryService() {
             if (QualityUpgrade.continueAfterLossySwap(mediaId)) {
                 // The immediate JioSaavn improvement stays audible while a
                 // slower lossless source is checked against its higher-quality
-                // floor. Wait for this pass to release `upgradeJob`; otherwise
-                // the second pass would see the first one as still active and
-                // return without starting its lookup.
-                val firstPass = upgradeJob
+                // floor. Wait for this pass to release the current slot;
+                // otherwise the second pass would see the first one as still
+                // active and return without starting its lookup.
+                val firstPass = upgradeJobs.current
                 scope.launch {
                     firstPass?.join()
                     lookForBetterCopy(player)
@@ -6542,7 +6534,7 @@ class PlaybackService : MediaLibraryService() {
                 "except for ${keep.joinToString()}",
         )
         val permitted = { stream: SourceStream -> SourceRegistry.permitsForPlayback(stream.sourceConfigId) }
-        cancelStaleUpgradeJob()
+        upgradeJobs.cancelAll()
         cancelPrefetch()
         StreamChoice.forgetWhere(keep) { !permitted(it) }
         QualityUpgrade.onCeilingLowered(keep, permitted)
