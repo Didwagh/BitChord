@@ -200,9 +200,17 @@ Implications for the chosen **Free-only** constraint:
   `/download-url/{id}?quality=hi96|hi24|flac`, maps qualities to Qobuz formats
   `27/7/6`, and uses redacted status-only logs. The `.sflx` omits
   `signedSession` entirely, so the stock app needs no zarz session and no fork.
-  Local checks: `cd worker/bitchord-nexus && npm test` → 11/11 pass, including
-  fake-signed-URL log assertions and a VM run of the addon against mocked host
-  globals. Deploy Worker `1.8.0`, then install the generated
+  Local checks: `cd worker/bitchord-nexus && npm test` → 15/15 pass, including
+  fake-signed-URL log assertions, a VM run of the addon against mocked host
+  globals, a health assertion that `ax`/`hf` are disabled, and a public-metadata
+  fallback test. Provider priority is fixed as Qobuz → Monochrome → LastWave;
+  dead `ax`/`hf` are not contacted. `/qobuz/search` also falls back to Qobuz
+  public metadata when the configured proxies are 503/401, so catalog rows can
+  still populate; full downloads still require a working lossless URL source.
+  `/download-url` also accepts a `qobuz-rest-api` compatible endpoint, so the
+  existing `QOBUZ_UPSTREAM_BASE_URL` binding can be repointed at a working
+  self-hosted provider without any APK change.
+  Deploy Worker `1.8.3`, then install the generated
   `bitchord-qobuz-worker.sflx`; no app setting or pasted credential is needed.
 - **Gate 2 — Tidal:** Worker owns `x-tidal-token` and the download API call.
   Compare diagnostics against the `401` capture in (13). Do not loosen matching
@@ -230,12 +238,12 @@ Implications for the chosen **Free-only** constraint:
 
 ## 10. Qobuz adapter deployment checklist
 
-1. Deploy `worker/bitchord-nexus/` (worker version `1.8.0`). Do **not** commit
+1. Deploy `worker/bitchord-nexus/` (worker version `1.8.3`). Do **not** commit
    provider URLs or secrets; `wrangler.toml` ships with empty values.
 2. In Worker Variables set at least `QOBUZ_PRIMARY_BASE_URL` and
    `QOBUZ_UPSTREAM_BASE_URL`. Use `wrangler secret put LW_SECRET` only if
    LastWave is wanted; the old built-in secret was removed.
-3. Confirm `GET /health` reports `"version":"1.8.0"` and
+3. Confirm `GET /health` reports `"version":"1.8.3"` and
    `"routes":{"downloadUrl":true,"addonQobuz":true}`.
 4. Build the stock addon:
    `cd worker/bitchord-nexus/addon/qobuz-worker && zip -q -X bitchord-qobuz-worker.sflx manifest.json index.js`.
@@ -256,7 +264,7 @@ its `bindings` array back with the new module. Never print those values.
 
 The sanitized `v1.7.1` module was deployed first and is the version that
 established the restored bindings. Compatibility date `2026-11-02` was
-preserved. The standalone-addon API in this repo is `v1.8.0` and is **not yet
+preserved. The standalone-addon API in this repo is `v1.8.3` and is **not yet
 live** at the time of writing; it must be deployed before installing the
 `.sflx`, because `/qobuz/search` does not exist on `v1.7.1`.
 
@@ -270,4 +278,4 @@ Live provider statuses at deploy time (statuses only): `ax 401`, `lw 200`,
 
 Reference source used: `/storage/emulated/0/Download/bitchord-nexus-worker (1).zip`.
 The deployed worker previously reported `v1.7.0`; the repo copy is a sanitized
-`v1.8.0` variant, not a blind overwrite.
+`v1.8.3` variant, not a blind overwrite.

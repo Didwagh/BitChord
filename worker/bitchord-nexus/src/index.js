@@ -1,15 +1,15 @@
 /**
  * BitChord Nexus — Cloudflare Worker
- * Sources (priority order): LastWave (lw:) · Qobuz-DL (qb:) · Monochrome (mc:) · HiFi/TIDAL (hf:)
- * LW first — independent of Monochrome/QB, keeps working when those go down.
- * QB second for 24-bit when available. MC/HF share Monochrome CDN.
+ * Active sources, in explicit priority order: Qobuz (qb:) · Monochrome (mc:) · LastWave (lw:)
+ * Aurix (ax:) and HiFi/TIDAL (hf:) are disabled: their upstreams currently
+ * answer 401/503, and trying them only adds latency and false hope.
  */
 
 // ── Manifest ──────────────────────────────────────────────────────────────────
 const MANIFEST = {
   id: 'com.bitchord.nexus',
   name: 'Nexus',
-  version: '1.8.0',
+  version: '1.8.3',
   resources: ['search', 'stream', 'download_url', 'addon_qobuz'],
   allowDownloads: 1,
   settings: [{
@@ -22,6 +22,18 @@ const MANIFEST = {
     ]
   }]
 };
+
+// Provider policy. The array order is the user's requested priority, not a
+// comment: dedup keeps the earlier provider on a tie, and the result list is
+// sorted by this rank before quality score. Disabled providers are not called
+// at all, though their bindings are left untouched in Cloudflare.
+const ENABLED_PROVIDERS = ['qb', 'mc', 'lw'];
+const DISABLED_PROVIDERS = ['ax', 'hf'];
+
+// Public Qobuz metadata endpoint used by qobuz-web. It needs no zarz session
+// and no user token. This is catalog data only — it never signs a full download.
+const QB_META_BASE  = 'https://api.zarz.moe/v2/qbz';
+const QB_META_APP_ID = '798273057';
 
 // ── Runtime config (lazy-init from env — constant per deployment) ─────────────
 let cfg = null;
@@ -285,18 +297,44 @@ function qbCustomFmt(quality) {
  * Only pass through measurements the upstream actually states. Omitted fields
  * stay omitted so the app cannot mistake a claim for a measurement.
  */
+function qbSignedUrlFrom(payload) {
+  const nested = payload?.data || {};
+  return payload?.download_url || payload?.url || payload?.link ||
+         nested.download_url || nested.url || nested.link || '';
+}
+
 async function qbDownloadUrl(trackId, quality) {
   const fmt = qbCustomFmt(quality);
-  const d = await qbGet(`/api/download-music?track_id=${encodeURIComponent(trackId)}&quality=${fmt}`);
-  if (!d) return null;
 
-  const nested = d.data || {};
-  const url = d.download_url || d.url || d.link ||
-              nested.download_url || nested.url || nested.link;
+  // Original qobuz-dll style endpoint. Kept first so current bindings behave
+  // exactly as before when they still work.
+  let d = await qbGet(`/api/download-music?track_id=${encodeURIComponent(trackId)}&quality=${fmt}`);
+  let url = qbSignedUrlFrom(d);
+
+  // qobuz-rest-api compatible servers use /download-url/{id}?quality=hi96|hi24|flac.
+  // This lets the same Worker binding point at a working self-hosted endpoint
+  // without an APK change or a pasted session. It is still a signed URL only —
+  // media bytes are fetched on the device, never through Cloudflare.
+  if (!url && cfg.QB_FALLBACK) {
+    const tier = ['hi96', 'hi24', 'flac'].includes(str(quality).toLowerCase())
+      ? str(quality).toLowerCase()
+      : 'flac';
+    d = await getJSON(
+      'QB-REST',
+      `${cfg.QB_FALLBACK}/download-url/${encodeURIComponent(trackId)}?quality=${tier}`
+    );
+    url = qbSignedUrlFrom(d);
+  }
+
   if (typeof url !== 'string' || !/^https:\/\//i.test(url)) return null;
 
-  const bitDepthRaw = Number(nested.bit_depth ?? d.bit_depth ?? 0);
-  const sampleRaw   = Number(nested.sample_rate ?? d.sample_rate ?? 0);
+  const nested = d?.data || {};
+  const bitDepthRaw = Number(nested.bit_depth ?? d?.bit_depth ?? 0);
+  // Legacy proxy says `sample_rate`; qobuz-rest-api says `sampling_rate`.
+  const sampleRaw   = Number(
+    nested.sampling_rate ?? nested.sample_rate ??
+    d?.sampling_rate ?? d?.sample_rate ?? 0
+  );
   const sampleRate  = sampleRaw > 0 && sampleRaw < 1000
     ? Math.round(sampleRaw * 1000)
     : sampleRaw;
@@ -375,11 +413,24 @@ function qbAddonItems(payload) {
   return payload?.data?.tracks?.items ?? payload?.tracks?.items ?? [];
 }
 
+async function qbPublicItems(query, limit) {
+  const n = Math.min(Math.max(Number(limit) || 20, 1), 50);
+  const d = await getJSON(
+    'QB-META',
+    `${QB_META_BASE}/track/search?query=${encodeURIComponent(query)}` +
+      `&limit=${n}&offset=0&app_id=${QB_META_APP_ID}`
+  );
+  return qbAddonItems(d);
+}
+
 async function qbAddonSearch(query, limit) {
   const n = Math.min(Math.max(Number(limit) || 20, 1), 50);
   const d = await qbGet(`/api/get-music?q=${encodeURIComponent(query)}&offset=0`);
-  const items = qbAddonItems(d);
-  if (!Array.isArray(items)) return [];
+  let items = qbAddonItems(d);
+  if (!items.length) {
+    items = await qbPublicItems(query, n);
+    log('QB-ADDON', `proxy empty → public metadata rows=${items.length}`);
+  }
 
   const tracks = [];
   for (const raw of items) {
@@ -392,12 +443,19 @@ async function qbAddonSearch(query, limit) {
 }
 
 async function qbAddonTrackById(trackId) {
-  const d = await qbGet(`/api/get-music?q=${encodeURIComponent(trackId)}&offset=0`);
-  const items = qbAddonItems(d);
-  if (!Array.isArray(items)) return null;
-  for (const raw of items) {
-    if (String(raw?.id || '') === trackId) return qbAddonTrack(raw);
+  const proxy = await qbGet(`/api/get-music?q=${encodeURIComponent(trackId)}&offset=0`);
+  const findId = (items) => (Array.isArray(items)
+    ? items.find((raw) => String(raw?.id || '') === trackId)
+    : null);
+
+  let raw = findId(qbAddonItems(proxy));
+  if (!raw) {
+    const items = await qbPublicItems(trackId, 20);
+    raw = findId(items);
+    if (raw) log('QB-ADDON', 'track recovered via public metadata');
   }
+  if (raw) return qbAddonTrack(raw);
+
   log('QB-ADDON', `track lookup idChars=${trackId.length} not found`);
   return null;
 }
@@ -742,46 +800,60 @@ function qualityScore(t) {
 // ── Search & Stream ───────────────────────────────────────────────────────────
 async function doSearch(q, quality) {
   log('SEARCH', `queryChars=${q.length} quality=${quality}`);
-  const [ax, lw, qb, mc, hf] = await Promise.allSettled([
-    axSearch(q, quality),   // Aurix — Tidal/Qobuz/Deezer with real creds
-    lwSearch(q, quality),   // LastWave — TIDAL via HiFi network
-    qbSearch(q),            // Qobuz proxy (primary → fallback)
-    mcSearch(q),            // Monochrome CDN
-    hfSearch(q, quality)    // HiFi/TIDAL public addon
-  ]);
-  const axT = ax.status === 'fulfilled' ? ax.value : [];
-  const lwT = lw.status === 'fulfilled' ? lw.value : [];
-  const qbT = qb.status === 'fulfilled' ? qb.value : [];
-  const mcT = mc.status === 'fulfilled' ? mc.value : [];
-  const hfT = hf.status === 'fulfilled' ? hf.value : [];
 
-  // Quality-score dedup — best version of each song wins regardless of which
-  // provider returned it first. 24-bit always beats 16-bit for the same track.
-  const byKey = new Map(); // key → { track, score }
+  // Call only the enabled providers, in priority order. Both results and
+  // duplicate winners obey ENABLED_PROVIDERS, so a higher-quality LastWave row
+  // can no longer outrank a lower-quality Qobuz row for the same song.
+  const searchers = {
+    qb: () => qbSearch(q),
+    mc: () => mcSearch(q),
+    lw: () => lwSearch(q, quality),
+  };
+  const settled = await Promise.allSettled(
+    ENABLED_PROVIDERS.map((prefix) => searchers[prefix]())
+  );
+  const byProvider = {};
+  ENABLED_PROVIDERS.forEach((prefix, index) => {
+    byProvider[prefix] = settled[index].status === 'fulfilled' ? settled[index].value : [];
+  });
 
-  for (const t of [...axT, ...lwT, ...qbT, ...mcT, ...hfT]) {
-    const key   = dedupKey(t.title, t.artist);
-    const score = qualityScore(t);
-    const prev  = byKey.get(key);
-    if (!prev || score > prev.score) {
-      byKey.set(key, { track: t, score });
+  const rankOf = (track) => {
+    const prefix = str(track?.id ?? '').split(':')[0];
+    const rank = ENABLED_PROVIDERS.indexOf(prefix);
+    return rank < 0 ? ENABLED_PROVIDERS.length : rank;
+  };
+
+  // Rank first, quality score only as a tie-breaker inside one provider.
+  const byKey = new Map(); // key → { track, rank, score }
+  for (const prefix of ENABLED_PROVIDERS) {
+    for (const t of byProvider[prefix]) {
+      const key   = dedupKey(t.title, t.artist);
+      const rank  = rankOf(t);
+      const score = qualityScore(t);
+      const prev  = byKey.get(key);
+      if (!prev || rank < prev.rank || (rank === prev.rank && score > prev.score)) {
+        byKey.set(key, { track: t, rank, score });
+      }
     }
   }
 
-  const result = [...byKey.values()].slice(0, 20).map(({ track: t }) => {
-    // Populate metadata store so stream response can carry display info
-    metaSet(t.id, {
-      title: t.title, artist: t.artist,
-      album: t.album, artwork: t.artwork, duration: t.duration
+  const result = [...byKey.values()]
+    .sort((a, b) => a.rank - b.rank || b.score - a.score)
+    .slice(0, 20)
+    .map(({ track: t }) => {
+      // Populate metadata store so stream response can carry display info
+      metaSet(t.id, {
+        title: t.title, artist: t.artist,
+        album: t.album, artwork: t.artwork, duration: t.duration
+      });
+      return t;
     });
-    return t;
-  });
 
   // Drop tracks that don't match the query well enough — returns [] so BitChord
   // falls through to the next addon (e.g. JioSaavn) instead of playing a wrong song
   const filtered = relevanceFilter(q, result);
 
-  log('SEARCH', `returning ${filtered.length} tracks (ax:${axT.length} lw:${lwT.length} qb:${qbT.length} mc:${mcT.length} hf:${hfT.length} dropped:${result.length - filtered.length})`);
+  log('SEARCH', `returning ${filtered.length} tracks (qb:${byProvider.qb.length} mc:${byProvider.mc.length} lw:${byProvider.lw.length} dropped:${result.length - filtered.length} disabled:${DISABLED_PROVIDERS.join(',')})`);
   return filtered;
 }
 
@@ -792,12 +864,15 @@ async function doStream(id, quality) {
   const prefix = id.slice(0, colon);
   const upId   = id.slice(colon + 1);
 
+  if (DISABLED_PROVIDERS.includes(prefix)) {
+    log('STREAM', `disabled provider idChars=${id.length}`);
+    return null;
+  }
+
   let result = null;
-  if      (prefix === 'ax') result = await axStream(upId, quality);
-  else if (prefix === 'lw') result = await lwStream(upId, quality);
-  else if (prefix === 'qb') result = await qbStream(upId, quality);
+  if      (prefix === 'qb') result = await qbStream(upId, quality);
   else if (prefix === 'mc') result = await mcStream(upId);
-  else if (prefix === 'hf') result = await hfStream(upId);
+  else if (prefix === 'lw') result = await lwStream(upId, quality);
 
   if (!result) return null;
 
@@ -850,8 +925,9 @@ async function handle(request, env) {
 
   // /health
   if (pathname === '/health') {
-    // Ping all providers in parallel — shows which are actually reachable right now
-    const ping = async (tag, url) => {
+    // Ping only active providers. Disabled upstreams are reported as such and
+    // are never contacted, so a dead 401/503 endpoint cannot add latency.
+    const ping = async (url) => {
       try {
         const r = await fetch(url, { signal: AbortSignal.timeout(5000), headers: HDRS });
         return { ok: r.ok, status: r.status };
@@ -859,22 +935,30 @@ async function handle(request, env) {
         return { ok: false, status: e.name === 'TimeoutError' ? 'timeout' : e.name };
       }
     };
-    const [ax, lw, qbP, qbF, mc, hf] = await Promise.all([
-      cfg.AX ? ping('AX', `${cfg.AX}manifest.json`)    : Promise.resolve({ ok: false, status: 'not configured' }),
-      cfg.LW ? ping('LW', `${cfg.LW}manifest.json`)    : Promise.resolve({ ok: false, status: 'not configured' }),
-      ping('QB-P', `${cfg.QB_PRIMARY}/health`),
-      ping('QB-F', `${cfg.QB_FALLBACK}/health`),
-      ping('MC',   `${cfg.MC}/search/tracks?q=test`),
-      ping('HF',   `${cfg.HF}/health`),
+    const [lw, qbP, qbF, mc] = await Promise.all([
+      cfg.LW ? ping(`${cfg.LW}manifest.json`) : Promise.resolve({ ok: false, status: 'not configured' }),
+      ping(`${cfg.QB_PRIMARY}/health`),
+      ping(`${cfg.QB_FALLBACK}/health`),
+      ping(`${cfg.MC}/search/tracks?q=test`),
     ]);
+    const disabled = { ok: false, status: 'disabled' };
     const status = {
       ok: true,
-      version: '1.8.0',
+      version: '1.8.3',
       ts: Date.now(),
       routes: { downloadUrl: true, addonQobuz: true },
-      providers: { ax, lw, qb_primary: qbP, qb_fallback: qbF, mc, hf },
+      enabled: ENABLED_PROVIDERS,
+      disabled: DISABLED_PROVIDERS,
+      providers: {
+        ax: disabled,
+        qb_primary: qbP,
+        qb_fallback: qbF,
+        mc,
+        lw,
+        hf: disabled,
+      },
     };
-    log('REQ', `◀ 200 health ax=${ax.status} lw=${lw.status} qb-p=${qbP.status} qb-f=${qbF.status} mc=${mc.status} hf=${hf.status} (${Date.now() - start}ms)`);
+    log('REQ', `◀ 200 health qb-p=${qbP.status} qb-f=${qbF.status} mc=${mc.status} lw=${lw.status} disabled=${DISABLED_PROVIDERS.join(',')} (${Date.now() - start}ms)`);
     return json(200, status);
   }
 

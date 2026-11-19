@@ -18,6 +18,26 @@ Two deliverables live here:
 | `GET /download-url/:id?quality=hi96\|hi24\|flac` | Signed HTTPS download URL |
 | `GET /search`, `GET /stream/:id` | Existing BitChord multi-provider routes |
 
+### Provider priority
+
+`/search` and `/stream` use this fixed order:
+
+1. Qobuz (`qb:`)
+2. Monochrome (`mc:`)
+3. LastWave (`lw:`)
+
+Aurix (`ax:`) and HiFi/TIDAL (`hf:`) are **disabled**: their upstreams were
+returning 401/503, so they are no longer contacted. Their Worker bindings are
+left intact, and `/health` reports them as `status: "disabled"`. Dedup keeps the
+earlier provider on a tie; quality score is only a tie-breaker inside the same
+provider.
+
+`/download-url` first tries the original `/api/download-music` proxy shape. If
+that fails, it also accepts a `qobuz-rest-api` compatible server at
+`QOBUZ_UPSTREAM_BASE_URL`, calling `/download-url/{id}?quality=hi96|hi24|flac`.
+That makes it possible to point the existing Worker binding at a working
+self-hosted endpoint without changing the APK or pasting a session.
+
 Quality mapping on `/download-url`:
 
 - `hi96` → Qobuz format `27` (24-bit hi-res)
@@ -25,13 +45,16 @@ Quality mapping on `/download-url`:
 - `flac` → Qobuz format `6` (16-bit CD lossless) — **never** the MP3 rung
 
 `/qobuz/search` returns only Qobuz rows, never a Tidal/LastWave result wearing
-a Qobuz badge. Catalog fields are copied only when the upstream states them.
+a Qobuz badge. It first asks the configured Qobuz proxies; if they are down or
+unauthenticated, it falls back to Qobuz's public metadata endpoint used by
+`qobuz-web`. That fallback supplies catalog rows only — it cannot sign a full
+lossless download. Catalog fields are copied only when the upstream states them.
 The downloaded bytes and the device decoder still decide the real codec,
 bit depth and sample rate.
 
 ## What changed from the downloaded reference
 
-- Added the standalone addon API above and bumped the worker to `1.8.0`.
+- Added the standalone addon API above and bumped the worker to `1.8.3`.
 - Removed hard-coded provider URLs and the built-in LastWave signing secret.
   Provider values live in Worker Variables/Secrets, not in source.
 - Rewrote logging so it never emits full URLs, URL prefixes, query strings,
@@ -58,8 +81,9 @@ Check the result:
 curl https://bitchord-nexus.<subdomain>.workers.dev/health
 ```
 
-Expected: `"version":"1.8.0"`,
-`"routes":{"downloadUrl":true,"addonQobuz":true}`.
+Expected: `"version":"1.8.3"`,
+`"routes":{"downloadUrl":true,"addonQobuz":true}`,
+`"enabled":["qb","mc","lw"]` and `"disabled":["ax","hf"]`.
 
 ### Important: preserve bindings on API upload
 

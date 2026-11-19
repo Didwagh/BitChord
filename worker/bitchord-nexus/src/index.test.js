@@ -5,6 +5,10 @@ import { handle } from './index.js';
 const ENV = {
   QOBUZ_PRIMARY_BASE_URL: 'https://primary.test',
   QOBUZ_UPSTREAM_BASE_URL: 'https://fallback.test',
+  MONOCHROME_BASE_URL: 'https://mc.test',
+  LASTWAVE_ROOT: 'https://lw.test',
+  AURIX_ROOT: 'https://ax.test',
+  HIFI_ADDON_BASE_URL: 'https://hf.test',
 };
 
 let fetchCalls = [];
@@ -17,8 +21,18 @@ function signedUrlFor(id) {
 globalThis.fetch = async (input, init) => {
   const url = new URL(String(input));
   fetchCalls.push({ url, init });
+  if (url.pathname === '/download-url/8585') {
+    return new Response(JSON.stringify({
+      url: signedUrlFor('8585'),
+      bit_depth: 24,
+      sampling_rate: 96,
+    }), { status: 200 });
+  }
   if (url.pathname === '/api/download-music') {
     const id = url.searchParams.get('track_id') || '0';
+    if (id === '8585') {
+      return new Response(JSON.stringify({ data: {} }), { status: 200 });
+    }
     return new Response(JSON.stringify({
       data: {
         url: signedUrlFor(id),
@@ -27,9 +41,27 @@ globalThis.fetch = async (input, init) => {
       },
     }), { status: 200 });
   }
+  if (url.hostname === 'api.zarz.moe' && url.pathname === '/v2/qbz/track/search') {
+    const query = url.searchParams.get('query') || '';
+    const id = query === 'public-only' ? 777 : (query === '9999' ? 9999 : 4242);
+    return new Response(JSON.stringify({
+      tracks: {
+        items: [{
+          id,
+          title: query === '9999' ? 'Public Recovery' : 'Public Metadata Row',
+          performer: { name: 'Public Artist' },
+          album: { title: 'Public Album', image: { large: 'https://art.test/public.jpg' } },
+          duration: 180,
+          isrc: 'PUBLICISRC0001',
+          maximum_bit_depth: 24,
+          maximum_sampling_rate: 96,
+        }],
+      },
+    }), { status: 200 });
+  }
   if (url.pathname === '/api/get-music') {
     const query = url.searchParams.get('q') || '';
-    if (query === 'missing') {
+    if (query === 'missing' || query === 'public-only' || query === '9999') {
       return new Response(JSON.stringify({ data: { tracks: { items: [] } } }), { status: 200 });
     }
     return new Response(JSON.stringify({
@@ -108,6 +140,20 @@ test('the download-url route maps addon quality names to lossless Qobuz formats'
   }
 });
 
+test('download-url also accepts a qobuz-rest-api compatible endpoint', async () => {
+  fetchCalls = [];
+  const { response, logs } = await get('/download-url/8585?quality=hi24');
+  assert.equal(response.status, 200);
+  const body = await response.json();
+  assert.equal(body.quality, 7);
+  assert.equal(body.bit_depth, 24);
+  assert.equal(body.sampling_rate, 96000);
+  assert.ok(body.url.startsWith('https://cdn.test/'));
+  assert.ok(fetchCalls.some((c) => c.url.pathname === '/download-url/8585'),
+    'qobuz-rest-api style endpoint should be tried');
+  assertNoSecretsInLogs(logs);
+});
+
 test('an invalid track id is refused without an upstream request', async () => {
   fetchCalls = [];
   const { response, logs } = await get('/download-url/not-a-number?quality=flac');
@@ -120,10 +166,25 @@ test('manifest and health advertise the adapter without leaking provider URLs', 
   const manifest = await get('/manifest.json');
   assert.equal(manifest.response.status, 200);
   const doc = await manifest.response.json();
-  assert.equal(doc.version, '1.8.0');
+  assert.equal(doc.version, '1.8.3');
   assert.ok(doc.resources.includes('download_url'));
   assert.ok(doc.resources.includes('addon_qobuz'));
   assertNoSecretsInLogs(manifest.logs);
+});
+
+test('health reports Qobuz first and disables dead providers', async () => {
+  fetchCalls = [];
+  const { response, logs } = await get('/health');
+  assert.equal(response.status, 200);
+  const body = await response.json();
+  assert.equal(body.version, '1.8.3');
+  assert.deepEqual(body.enabled, ['qb', 'mc', 'lw']);
+  assert.deepEqual(body.disabled, ['ax', 'hf']);
+  assert.equal(body.providers.ax.status, 'disabled');
+  assert.equal(body.providers.hf.status, 'disabled');
+  assert.ok(!fetchCalls.some((c) => c.url.hostname === 'ax.test' || c.url.hostname === 'hf.test'),
+    'disabled providers must not be contacted');
+  assertNoSecretsInLogs(logs);
 });
 
 test('the standalone addon search route returns stock-addon track fields only', async () => {
@@ -155,6 +216,32 @@ test('the standalone addon track fallback uses the same mapper', async () => {
   const body = await response.json();
   assert.equal(body.track.id, '4242');
   assert.equal(body.track.name, 'Alpha Beta');
+  assertNoSecretsInLogs(logs);
+});
+
+test('addon search falls back to public Qobuz metadata when the proxies are empty', async () => {
+  fetchCalls = [];
+  const { response, logs } = await get('/qobuz/search?q=public-only&limit=5');
+  assert.equal(response.status, 200);
+  const body = await response.json();
+  assert.equal(body.tracks.length, 1);
+  assert.equal(body.tracks[0].id, '777');
+  assert.equal(body.tracks[0].artists, 'Public Artist');
+
+  assert.ok(fetchCalls.some((c) => c.url.hostname === 'api.zarz.moe'),
+    'public Qobuz metadata should be consulted');
+  assertNoSecretsInLogs(logs);
+  assert.ok(!logs.includes('public-only'), 'search text must not be logged');
+});
+
+test('addon track lookup recovers an id through public Qobuz metadata', async () => {
+  fetchCalls = [];
+  const { response, logs } = await get('/qobuz/track/9999');
+  assert.equal(response.status, 200);
+  const body = await response.json();
+  assert.equal(body.track.id, '9999');
+  assert.equal(body.track.name, 'Public Recovery');
+  assert.ok(fetchCalls.some((c) => c.url.hostname === 'api.zarz.moe'));
   assertNoSecretsInLogs(logs);
 });
 

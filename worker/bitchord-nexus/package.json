@@ -1,6 +1,6 @@
 {
   "name": "bitchord-nexus-worker",
-  "version": "1.8.0",
+  "version": "1.8.3",
   "private": true,
   "type": "module",
   "scripts": {
