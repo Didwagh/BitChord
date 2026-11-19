@@ -1203,8 +1203,14 @@ object SourceResolver {
             // nothing else is worth cutting a listener's audio for — or filing
             // on their device under the name of the track they asked for.
             if (strict) {
+                // A row that states no runtime has not disagreed with the
+                // target's — Amazon's search never states one. Those rows reach
+                // the byte/decoder length checks in `streamBest`, the direct
+                // probe and the upgrade audition; treating "unstated" as "wrong
+                // length" silently disabled strict playback and downloads for
+                // the whole catalogue. See `withinSecondsOrUnstated`.
                 val (sameLength, otherLength) = matches.partition {
-                    TrackMatcher.withinSeconds(it, matchOn, driftSec)
+                    TrackMatcher.withinSecondsOrUnstated(it, matchOn, driftSec)
                 }
                 // Named rather than dropped silently: a copy refused for its
                 // length reads in the log exactly like a source that never had

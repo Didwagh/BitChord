@@ -477,8 +477,22 @@ object QualityUpgrade {
             waiting.inFlight?.let { lookup ->
                 val late = runCatching { lookup.await() }.getOrNull()
                 val slack = SourceResolver.upgradeSlackSec()
+                // A catalogue that states no runtime (Amazon's search rows)
+                // cannot be refused here on length: it has not disagreed. The
+                // audition below measures the decoded file against the track
+                // already playing, which is the stronger check, so let it be
+                // the one that says no when the copy is wrong.
                 val sameLength = late != null &&
-                    SourceResolver.sameRecordingAs(late.durationSec, effectiveDurationSec, slack)
+                    (late.durationSec == null ||
+                        SourceResolver.sameRecordingAs(late.durationSec, effectiveDurationSec, slack))
+                if (late != null && late.durationSec == null) {
+                    TrackLog.d(
+                        TAG,
+                        "'${waiting.target.title}': the live lookup's ${late.format.summary} states no runtime; " +
+                            "the audition's decoded length will decide",
+                        about = mediaId,
+                    )
+                }
                 // The live lookup logs "substituted … at <format>" on finding
                 // this, so a refusal that said nothing read as a swap that had
                 // happened. Named, with both runtimes and the bar between them.

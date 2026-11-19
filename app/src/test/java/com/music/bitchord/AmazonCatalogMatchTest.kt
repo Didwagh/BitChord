@@ -104,6 +104,26 @@ class AmazonCatalogMatchTest {
     }
 
     @Test
+    fun `a row with no stated runtime is not a length disagreement`() {
+        val song = songFrom(believerRow)!!
+        assertTrue(
+            "Amazon's unstated runtime must survive strict length filtering",
+            TrackMatcher.withinSecondsOrUnstated(song, target, 6),
+        )
+        // The ordinary bar still answers no: this is deliberately a widening of
+        // the strict caller's filter, not of `withinSeconds` itself.
+        assertEquals(false, TrackMatcher.withinSeconds(song, target, 6))
+    }
+
+    @Test
+    fun `a stated runtime is still held to the strict bar`() {
+        val right = songFrom(believerRow + ("duration_ms" to 204_000))!!
+        val wrong = songFrom(believerRow + ("duration_ms" to 125_000))!!
+        assertTrue(TrackMatcher.withinSecondsOrUnstated(right, target, 6))
+        assertEquals(false, TrackMatcher.withinSecondsOrUnstated(wrong, target, 6))
+    }
+
+    @Test
     fun `a composite key round trips to the raw Amazon id`() {
         val song = songFrom(believerRow)!!
         assertEquals("B079VDQRPX", SourceTrackKeys.parse(song.videoId)?.second)

@@ -353,6 +353,26 @@ object TrackMatcher {
     }
 
     /**
+     * The strict-match bar for catalogues that do not state a runtime on a
+     * search row. Amazon's `showSearch` is the concrete case: every row carries
+     * `duration_ms: 0`, which the Mornye track parser honestly reads as
+     * *unknown* rather than a zero-second song. Passing those rows to
+     * [withinSeconds] threw out exact title-and-artist matches in every
+     * strict lookup — direct playback, upgrades and downloads — while the very
+     * same rows worked in a relaxed search.
+     *
+     * A row that says nothing has not disagreed. It is allowed through, and the
+     * checks that measure bytes (the file-length probe on direct playback, the
+     * decoder's own duration in an upgrade audition) remain the ones that decide
+     * whether the copy really is that recording. A row that *does* state a
+     * runtime is still held to the same bar as every other source.
+     */
+    fun withinSecondsOrUnstated(candidate: Song, target: Target, seconds: Int): Boolean {
+        if (secondsOf(candidate.durationText) == null) return true
+        return withinSeconds(candidate, target, seconds)
+    }
+
+    /**
      * Kept for the callers that only want a yes or no — the YouTube seed
      * lookup behind AutoPlay, and the tests.
      */

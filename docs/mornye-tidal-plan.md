@@ -17,6 +17,33 @@ Line numbers are from the inspected snapshots; grep before relying on an exact o
 
 `DONE` = present in current checkout. `PARTIAL` = generic plumbing exists but provider path not exercised/proven. `TODO` = must implement. `BLOCKED` = upstream/external failure, not fixable by us honestly.
 
+## 0a. Current diagnosis — `bitchord-diagnostics (13).txt` (2026-11-19)
+
+This is a newer capture than the `/dl/tid` 503 evidence in diagnostics (12).
+It shows a **different, earlier gate**:
+
+- `DIAG13:36,43,46,150-152` — `tidal-web v1.2.15` is installed and its signed
+  session connects (`18:45:39`, still reported connected at `18:56:25`).
+- `DIAG13:61,82-92,164-182,263-274,316-346,509-530,591-614,698-701,710-739` —
+  every `GET https://tidal.com/v1/search/tracks?...deviceType=BROWSER...`
+  answers `401 84b`; the addon logs `searchTracks error: HTTP 401 …` and returns
+  an empty list.
+- `MorneyeSource.kt:188-211` treats that throw as an empty search;
+  `SourceResolver.kt:1222-1244` then logs "Tidal has no match" with **zero**
+  candidates. No `download()` is ever invoked on this capture.
+- Consequently there is no `/dl/tid` 503 in (13): the download API is never
+  reached. The 503 in (12) remains a real second gate for whenever search works,
+  and is already classified `BLOCKED` at §1.6 / §3 / §6.
+
+**Classification:** `BLOCKED (upstream auth)` for the addon's public web
+metadata token, not a local matcher or queue bug. The token setting is already
+called out at §1.2 (`TD/index.js:232-238,257-283`) as a redacted public web
+token; a rotated/revoked token or an API change must be fixed in the addon,
+not by loosening BitChord's matching or by faking a lossless source. A reconnect
+or a newer `tidal-web` package is the honest remedy. Do not add infinite 401
+retries — the resolver's bounded source failure/fallthrough is the right local
+behaviour.
+
 ## 0. Verdict / OPA
 
 - **DONE (generic):** BitChord can install/run `.sflx`, show Mornye rows in Addons tab, call `download()`, join DASH segments, cache bytes, sniff codecs, and publish measured Stats.
