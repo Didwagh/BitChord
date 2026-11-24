@@ -31,9 +31,12 @@ import java.util.Locale
  * the files were `.webm` then — a container extension Android's own mime table
  * ties to video regardless of what MIME type this class declares for it — and a
  * Gallery app crawling Downloads for video-looking files does not care what a
- * column says otherwise. Nothing writes `.webm` any more (see [storable] and
- * `StreamResolver.resolveForDownload`), so that particular trap is behind us;
- * the conclusion it led to is still the right one.
+ * column says otherwise. Shared-storage downloads no longer write `.webm`:
+ * YouTube saves are pinned to M4A/AAC and source WebM is passed over (see
+ * [Downloads] and `StreamResolver.resolveForDownload`). A user who
+ * deliberately turns export off can still keep WebM in app-private storage,
+ * which this class never exposes to the media index; that is the point of the
+ * two destinations, not a loophole.
  *
  *  - **API 29+** goes through [MediaStore]. There is no filesystem path to
  *    write to; the store mints a row, hands back a content uri, and the file
