@@ -1156,6 +1156,7 @@ object SourceResolver {
                     // catalogue that files its rows by tier should describe
                     // them at the tier this is about to ask for.
                     request = request,
+                    target = target,
                 )
             } ?: return null
             // A runtime the queue row never carried, looked up beside the
