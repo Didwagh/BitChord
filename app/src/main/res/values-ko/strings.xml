@@ -1326,9 +1326,6 @@
     <string name="bit_perfect_status_inexact">%1$s · 정확하지 않음: 이 소스는 무손실 PCM이 아닙니다</string>
     <string name="bit_perfect_status_waiting">지원되는 출력에서 무손실 트랙을 기다리는 중</string>
     <string name="bit_perfect_status_unavailable">이 트랙에서 사용할 수 없음(%1$s)</string>
-    <string name="diwali_title">BitChord wishes you a Happy Diwali</string>
-    <string name="diwali_subtitle">May this festival of lights fill your home with joy and your days with music.</string>
-    <string name="diwali_cta">Let\'s Celebrate</string>
     <string name="find_a_playlist">재생목록 찾기</string>
     <string name="no_playlists_match">“%1$s”와(과) 일치하는 재생목록이 없습니다</string>
     <string name="hide_lyrics_preview">가사 숨기기</string>

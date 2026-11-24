@@ -1453,9 +1453,6 @@
     <string name="bit_perfect_status_inexact">%1$s · 不精確：此音源不是無損 PCM</string>
     <string name="bit_perfect_status_waiting">正在等待受支援輸出上的無損曲目</string>
     <string name="bit_perfect_status_unavailable">此曲目無法使用（%1$s）</string>
-    <string name="diwali_title">BitChord wishes you a Happy Diwali</string>
-    <string name="diwali_subtitle">May this festival of lights fill your home with joy and your days with music.</string>
-    <string name="diwali_cta">Let\'s Celebrate</string>
     <string name="find_a_playlist">尋找播放列表</string>
     <string name="no_playlists_match">沒有符合「%1$s」的播放列表</string>
     <string name="hide_lyrics_preview">隱藏歌詞</string>
