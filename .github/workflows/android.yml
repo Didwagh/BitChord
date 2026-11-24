@@ -59,6 +59,17 @@ jobs:
     - name: Grant execute permission for gradlew
       run: chmod +x gradlew
 
+    # Never ship a fork build whose in-app updater could install upstream APKs.
+    - name: Verify the updater still targets this fork
+      run: |
+        set -eu
+        file=app/src/main/java/com/music/bitchord/data/AppUpdateChecker.kt
+        grep -q 'https://api.github.com/repos/Didwagh/BitChord/releases/latest' "$file"
+        if grep -q 'https://api.github.com/repos/kushagrasinghx/BitChord/releases/latest' "$file"; then
+          echo "App updates must never point at the upstream repository." >&2
+          exit 1
+        fi
+
     - name: Build Mobile Prod Release APK
       run: ./gradlew :app:assembleProdRelease -Pbitchord.bundleWear=false --no-daemon --stacktrace
 

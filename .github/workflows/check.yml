@@ -41,6 +41,18 @@ jobs:
 
       - run: chmod +x gradlew
 
+      # An upstream merge must never turn this fork's updater back onto the
+      # upstream APKs; both apps share a package id and would replace each other.
+      - name: Verify the updater still targets this fork
+        run: |
+          set -eu
+          file=app/src/main/java/com/music/bitchord/data/AppUpdateChecker.kt
+          grep -q 'https://api.github.com/repos/Didwagh/BitChord/releases/latest' "$file"
+          if grep -q 'https://api.github.com/repos/kushagrasinghx/BitChord/releases/latest' "$file"; then
+            echo "App updates must never point at the upstream repository." >&2
+            exit 1
+          fi
+
       - name: Tests
         run: ./gradlew testDevDebugUnitTest
 

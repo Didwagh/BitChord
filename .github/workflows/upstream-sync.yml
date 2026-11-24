@@ -1,0 +1,121 @@
+name: Upstream Sync
+
+# Source-level sync only. Installing an APK never merges code, and this job
+# never publishes a release by itself: it opens a PR after a clean merge so the
+# normal Check workflow and a human review still stand between upstream and the
+# fork's Qobuz/Amazon changes.
+
+on:
+  schedule:
+    - cron: '17 * * * *' # hourly, 17 minutes past
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: upstream-sync
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    name: Open a clean upstream merge PR
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout fork
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Configure git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Fetch upstream
+        id: fetch
+        run: |
+          set -eu
+          git remote add upstream https://github.com/kushagrasinghx/BitChord.git 2>/dev/null || \
+            git remote set-url upstream https://github.com/kushagrasinghx/BitChord.git
+          git fetch --no-tags upstream main
+          sha=$(git rev-parse upstream/main)
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          echo "short=${sha:0:12}" >> "$GITHUB_OUTPUT"
+
+      - name: Decide whether to sync
+        id: decide
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SHA: ${{ steps.fetch.outputs.sha }}
+          SHORT: ${{ steps.fetch.outputs.short }}
+        run: |
+          set -eu
+          BRANCH="upstream-sync/$SHORT"
+          echo "branch=$BRANCH" >> "$GITHUB_OUTPUT"
+
+          # Upstream already folded into main: nothing to bring over.
+          if git merge-base --is-ancestor "$SHA" origin/main; then
+            echo "action=up-to-date" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # Keep at most one sync PR open. If it was closed without merging,
+          # drop stale workflow-owned branches and let a fresh run recreate one.
+          OPEN=$(gh pr list --repo "$GITHUB_REPOSITORY" --state open \
+            --json number,headRefName \
+            --jq '[.[] | select(.headRefName | startswith("upstream-sync/"))] | length')
+          if [ "$OPEN" -ne 0 ]; then
+            echo "action=pr-open" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          for ref in $(git ls-remote --heads origin 'refs/heads/upstream-sync/*' \
+            | sed 's#.*refs/heads/##'); do
+            git push origin --delete "$ref"
+          done
+
+          echo "action=sync" >> "$GITHUB_OUTPUT"
+
+      - name: Merge cleanly and open PR
+        if: steps.decide.outputs.action == 'sync'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SHA: ${{ steps.fetch.outputs.sha }}
+          SHORT: ${{ steps.fetch.outputs.short }}
+          BRANCH: ${{ steps.decide.outputs.branch }}
+        run: |
+          set -eu
+          git checkout -B "$BRANCH" origin/main
+          if ! git merge --no-ff --no-edit "$SHA"; then
+            git merge --abort || true
+            echo "Upstream touched the same lines as the fork; no PR for $SHORT." >&2
+            exit 0
+          fi
+
+          # A cherry-pick may already carry the upstream change. A merge commit
+          # with an identical tree is noise, not an update.
+          if git diff --quiet origin/main HEAD; then
+            echo "No tree change after merge; skipping PR for $SHORT."
+            exit 0
+          fi
+
+          git push origin "$BRANCH"
+          cat > pr-body.md <<EOF
+          Automated clean merge of upstream BitChord at \`$SHA\`.
+
+          Git reported no conflicts. Review is still required: a clean merge can
+          change behaviour without a textual conflict, especially in playback,
+          sources, and the updater. Check must pass before this is merged.
+
+          After merging, publish a new fork release so installed copies keep
+          updating from this fork rather than upstream.
+          EOF
+          gh pr create --repo "$GITHUB_REPOSITORY" \
+            --base main --head "$BRANCH" \
+            --title "Upstream sync: $SHORT" \
+            --body-file pr-body.md
+
+      - name: Note a failed attempt
+        if: failure() && steps.decide.outputs.action == 'sync'
+        run: echo "Sync attempt failed; no PR was opened. See the job log above."
