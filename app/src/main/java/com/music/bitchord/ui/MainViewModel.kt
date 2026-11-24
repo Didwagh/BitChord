@@ -12,6 +12,7 @@ import com.music.bitchord.auth.profileId
 import com.music.bitchord.auth.sessionId
 import com.music.bitchord.auth.adjacentProfile
 import com.music.bitchord.data.AppUpdateChecker
+import com.music.bitchord.data.UpstreamUpdateChecker
 import com.music.bitchord.data.LocalMediaRepository
 import com.music.bitchord.data.LikeState
 import com.music.bitchord.data.YtMusicRepository
@@ -664,6 +665,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     /** Set once per launch if GitHub has a release newer than this build. */
     val updateAvailable: StateFlow<AppUpdateChecker.UpdateInfo?> = AppUpdateChecker.available
+
+    /** Metadata-only notice for a new upstream release; never installs an APK. */
+    val upstreamUpdateAvailable: StateFlow<UpstreamUpdateChecker.UpstreamRelease?> =
+        UpstreamUpdateChecker.available
 
     // ---- Ratings, library and playlists -------------------------------------
 
@@ -1513,6 +1518,15 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             // downloaded it — see AppUpdateChecker.clearCache.
             AppUpdateChecker.clearCache(getApplication())
             AppUpdateChecker.check()
+        }
+        viewModelScope.launch {
+            // Separate from the fork updater: upstream is metadata only, and
+            // keys off release id because fork/upstream version numbers diverged.
+            // A 30-minute poll keeps a long-lived app current without a server.
+            while (true) {
+                UpstreamUpdateChecker.check(getApplication())
+                delay(30 * 60_000L)
+            }
         }
     }
 

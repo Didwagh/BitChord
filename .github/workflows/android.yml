@@ -60,13 +60,19 @@ jobs:
       run: chmod +x gradlew
 
     # Never ship a fork build whose in-app updater could install upstream APKs.
-    - name: Verify the updater still targets this fork
+    - name: Verify updater targets and upstream notice
       run: |
         set -eu
         file=app/src/main/java/com/music/bitchord/data/AppUpdateChecker.kt
         grep -q 'https://api.github.com/repos/Didwagh/BitChord/releases/latest' "$file"
         if grep -q 'https://api.github.com/repos/kushagrasinghx/BitChord/releases/latest' "$file"; then
           echo "App updates must never point at the upstream repository." >&2
+          exit 1
+        fi
+        upstream=app/src/main/java/com/music/bitchord/data/UpstreamUpdateChecker.kt
+        grep -q 'https://api.github.com/repos/kushagrasinghx/BitChord/releases/latest' "$upstream"
+        if grep -q 'browser_download_url' "$upstream"; then
+          echo "The upstream notice must stay metadata-only; never expose upstream APKs." >&2
           exit 1
         fi
 

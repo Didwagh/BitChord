@@ -130,6 +130,7 @@ import com.music.bitchord.auth.SpotifyLoginScreen
 import com.music.bitchord.auth.WebSessionMode
 import com.music.bitchord.auth.YtMusicLoginScreen
 import com.music.bitchord.data.AppUpdateChecker
+import com.music.bitchord.data.UpstreamUpdateChecker
 import com.music.bitchord.data.LocalMediaRepository
 import com.music.bitchord.data.listentogether.JamInviteLink
 import com.music.bitchord.data.listentogether.ListenTogether
@@ -293,6 +294,7 @@ import com.music.bitchord.ui.components.TranslationLanguageDialog
 import com.music.bitchord.ui.components.LyricsSourcesDialog
 import com.music.bitchord.ui.components.ServerEditorHost
 import com.music.bitchord.ui.components.UpdateAvailableDialog
+import com.music.bitchord.ui.components.UpstreamUpdateDialog
 import com.music.bitchord.ui.components.WebDavConflictAlert
 import com.music.bitchord.ui.components.FieldConfig
 import com.music.bitchord.ui.icons.BitChordIcons
@@ -871,6 +873,8 @@ private fun BitChordApp(
     var updateDialogShown by rememberSaveable { mutableStateOf(false) }
     var showUpdateDialog by remember { mutableStateOf(false) }
     val updateAvailable by viewModel.updateAvailable.collectAsStateWithLifecycle()
+    var showUpstreamDialog by rememberSaveable { mutableStateOf(false) }
+    val upstreamNotice by viewModel.upstreamUpdateAvailable.collectAsStateWithLifecycle()
 
     /**
      * The single gate both surfaces read, so the icon can't announce the update
@@ -883,6 +887,17 @@ private fun BitChordApp(
         if (updateNotice != null && !updateDialogShown) {
             updateDialogShown = true
             showUpdateDialog = true
+        }
+    }
+
+    // A fork update is the actionable news; the upstream nudge waits until
+    // there is no fork update on screen. The checker itself shows each upstream
+    // release id only once, and dismissing it writes that id to prefs.
+    LaunchedEffect(updateNotice, upstreamNotice) {
+        if (updateNotice != null) {
+            showUpstreamDialog = false
+        } else if (upstreamNotice != null) {
+            showUpstreamDialog = true
         }
     }
     val query by viewModel.query.collectAsStateWithLifecycle()
@@ -2820,6 +2835,10 @@ private fun BitChordApp(
         BackHandler(enabled = replayDrawable && replayStory != null && !showReplayShare) { replayStory = null }
         BackHandler(enabled = replayDrawable && showReplayShare) { showReplayShare = false }
         BackHandler(enabled = showUpdateDialog) { showUpdateDialog = false }
+        BackHandler(enabled = showUpstreamDialog) {
+            upstreamNotice?.let { UpstreamUpdateChecker.dismiss(context) }
+            showUpstreamDialog = false
+        }
         BackHandler(enabled = showListenBrainzLogin) { showListenBrainzLogin = false }
         BackHandler(enabled = showLastfmLogin) { showLastfmLogin = false }
         BackHandler(enabled = discordDialog != null) { discordDialog = null }
@@ -5422,6 +5441,32 @@ private fun BitChordApp(
                         AppUpdateChecker.resetDownload()
                         context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(update.releaseUrl)))
                         showUpdateDialog = false
+                    },
+                )
+            }
+        }
+
+        // Upstream news never offers an APK. It only copies a prompt for
+        // OpenCode to sync the fork, then the normal fork updater takes over.
+        if (showUpstreamDialog && onboardingComplete && updateNotice == null) {
+            upstreamNotice?.let { release ->
+                UpstreamUpdateDialog(
+                    release = release,
+                    hazeState = hazeState,
+                    onDismiss = {
+                        UpstreamUpdateChecker.dismiss(context)
+                        showUpstreamDialog = false
+                    },
+                    onCopyPrompt = {
+                        clipboard.setText(AnnotatedString(UpstreamUpdateChecker.openCodePrompt(release)))
+                        Toast.makeText(context, R.string.upstream_prompt_copied, Toast.LENGTH_LONG).show()
+                        UpstreamUpdateChecker.dismiss(context)
+                        showUpstreamDialog = false
+                    },
+                    onOpenReleasePage = {
+                        context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(release.releaseUrl)))
+                        UpstreamUpdateChecker.dismiss(context)
+                        showUpstreamDialog = false
                     },
                 )
             }
