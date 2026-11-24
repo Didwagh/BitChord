@@ -237,12 +237,13 @@ object AppSettings {
     val wifiOnlyDownloads = MutableStateFlow(true)
 
     /**
-     * Keep ordinary downloads in Music/BitChord where other music apps can see
-     * them. Off (the default) keeps downloads in this app's private storage.
-     * HLS downloads always stay private because they are a playlist package,
-     * not one portable audio file.
+     * Keep ordinary downloads in `Music/BitChord`, where a file manager and
+     * other players can see them. On by default in this fork; turning it off
+     * keeps new downloads in app-private storage. HLS downloads still stay
+     * private because they are a playlist package with sidecars, not one
+     * portable audio file the Music collection can index.
      */
-    val exportDownloads = MutableStateFlow(false)
+    val exportDownloads = MutableStateFlow(true)
 
     /**
      * Check the playlists downloaded whole for newly added songs and download
@@ -961,6 +962,7 @@ object AppSettings {
 
     private fun readAll() {
         migrateSingleQuality()
+        migrateExportDownloadsOnByDefault()
         audioQualityWifi.value = readQuality(KEY_QUALITY_WIFI)
         audioQualityCellular.value = readQuality(KEY_QUALITY_CELLULAR)
         upgradeLengthSlackSeconds.value = prefs.getInt(
@@ -970,7 +972,7 @@ object AppSettings {
         migrateDownloadQuality()
         downloadQuality.value = readDownloadQuality()
         wifiOnlyDownloads.value = prefs.getBoolean(KEY_WIFI_ONLY_DOWNLOADS, true)
-        exportDownloads.value = prefs.getBoolean(KEY_EXPORT_DOWNLOADS, false)
+        exportDownloads.value = prefs.getBoolean(KEY_EXPORT_DOWNLOADS, true)
         syncDownloadedPlaylists.value = prefs.getBoolean(KEY_SYNC_DOWNLOADED_PLAYLISTS, false)
         crossfadeSeconds.value = prefs.getInt(KEY_CROSSFADE, 0)
         smartFadeEnabled.value = prefs.getBoolean(KEY_SMART_FADE, false)
@@ -1185,6 +1187,21 @@ object AppSettings {
     private fun readQuality(key: String): AudioQuality {
         val stored = prefs.getString(key, null) ?: return AudioQuality.LOSSLESS
         return runCatching { AudioQuality.valueOf(stored) }.getOrDefault(AudioQuality.LOSSLESS)
+    }
+
+    /**
+     * Saved downloads belong in `Music/BitChord`, where a file manager and other
+     * players can see them. Older builds defaulted this off, which left bulk
+     * downloads in app-private storage and let YouTube saves land as
+     * WebM/Opus. Flip it on once for every existing install; the user can still
+     * switch it off afterwards if they really want private files.
+     */
+    private fun migrateExportDownloadsOnByDefault() {
+        if (prefs.getBoolean(KEY_EXPORT_DOWNLOADS_DEFAULT_ON_V1, false)) return
+        prefs.edit()
+            .putBoolean(KEY_EXPORT_DOWNLOADS, true)
+            .putBoolean(KEY_EXPORT_DOWNLOADS_DEFAULT_ON_V1, true)
+            .apply()
     }
 
     /**
@@ -2254,6 +2271,8 @@ object AppSettings {
     private const val KEY_QUALITY_DOWNLOAD = "audio_quality_download"
     private const val KEY_WIFI_ONLY_DOWNLOADS = "wifi_only_downloads"
     private const val KEY_EXPORT_DOWNLOADS = "export_downloads"
+    /** One-shot migration: make shared-storage saves the default on old installs too. */
+    private const val KEY_EXPORT_DOWNLOADS_DEFAULT_ON_V1 = "export_downloads_default_on_v1"
     private const val KEY_SYNC_DOWNLOADED_PLAYLISTS = "sync_downloaded_playlists"
     private const val KEY_CROSSFADE = "crossfade_seconds"
     private const val KEY_SMART_FADE = "smart_fade_enabled"

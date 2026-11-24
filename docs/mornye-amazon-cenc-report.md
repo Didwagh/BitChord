@@ -56,18 +56,13 @@ appears in that capture.
 - Prefer the track KID over PSSH KIDs when creating the ClearKey request.
 - Log only presence, counts, KIDs, and status counts; never the key material.
 
-## Relevance to Deezer and Tidal
+## Scope
 
-This CENC/KID bug does not transfer directly:
+This report is about Amazon Music's CENC path only. Deezer and Tidal plans were
+removed with the rest of the out-of-scope provider work; their crypto paths are
+not carried by this fork.
 
-- Deezer predecrypts with a Blowfish key derived from the track ID and uses
-  `transformPatternedBlocks`; no CENC, PSSH, or ClearKey is involved
-  (`docs/mornye-deezer-plan.md:79-85`).
-- Tidal uses direct downloads or host-side DASH segment assembly and has no
-  addon crypto in the normal path; no key is returned to the host
-  (`docs/mornye-tidal-plan.md:79-91`).
-
-The shared risks are instead:
+The remaining risks are:
 
 - Addon labels and self-authored `.flac` filenames must not become lossless
   evidence; bytes and decoder output are authoritative.

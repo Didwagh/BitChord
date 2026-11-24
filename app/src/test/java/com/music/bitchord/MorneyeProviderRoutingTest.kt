@@ -25,48 +25,38 @@ import org.junit.Test
 class MorneyeProviderRoutingTest {
 
     @Test
-    fun `recognises only known Deezer Tidal and Qobuz URL shapes`() {
-        assertEquals(MorneyeProviderHint.DEEZER, morneyeUrlProvider("https://www.deezer.com/track/123"))
-        assertEquals(MorneyeProviderHint.DEEZER, morneyeUrlProvider("https://deezer.page.link/abc?x=1"))
-        assertEquals(MorneyeProviderHint.DEEZER, morneyeUrlProvider("deezer:track:123"))
-        assertEquals(MorneyeProviderHint.TIDAL, morneyeUrlProvider("https://listen.tidal.com/track/456"))
-        assertEquals(MorneyeProviderHint.TIDAL, morneyeUrlProvider("tidal://track/456"))
+    fun `recognises only Qobuz URL shapes`() {
         assertEquals(MorneyeProviderHint.QOBUZ, morneyeUrlProvider("https://open.qobuz.com/track/789"))
+        assertEquals(MorneyeProviderHint.QOBUZ, morneyeUrlProvider("https://www.qobuz.com/track/789"))
         assertEquals(MorneyeProviderHint.QOBUZ, morneyeUrlProvider("qobuzapp://track/789"))
         assertEquals(MorneyeProviderHint.QOBUZ, morneyeUrlProvider("qobuz:track:789"))
         assertNull(morneyeUrlProvider("Believer Imagine Dragons"))
-        assertNull(morneyeUrlProvider("https://example.com/track/deezer/1"))
+        assertNull(morneyeUrlProvider("https://example.com/track/qobuz/1"))
         assertNull(morneyeUrlProvider("https://cdn.qobuz.com/track/789"))
+        // Tidal and Deezer are no longer routed by this fork.
+        assertNull(morneyeUrlProvider("https://listen.tidal.com/track/456"))
+        assertNull(morneyeUrlProvider("tidal://track/456"))
+        assertNull(morneyeUrlProvider("https://www.deezer.com/track/123"))
+        assertNull(morneyeUrlProvider("deezer:track:123"))
     }
 
     @Test
-    fun `maps installed addon keys and labels to exact provider hints`() {
-        assertEquals(MorneyeProviderHint.DEEZER, morneyeProviderForAddon("deezer", "Deezer"))
-        assertEquals(MorneyeProviderHint.TIDAL, morneyeProviderForAddon("tidal-web", "Tidal"))
+    fun `maps only Qobuz addon keys and labels to provider hints`() {
         assertEquals(MorneyeProviderHint.QOBUZ, morneyeProviderForAddon("qobuz-web", "Qobuz"))
+        assertEquals(MorneyeProviderHint.QOBUZ, morneyeProviderForAddon("qobuz-app-like", ""))
         assertNull(morneyeProviderForAddon("amazon", "Amazon Music"))
+        assertNull(morneyeProviderForAddon("tidal-web", "Tidal"))
+        assertNull(morneyeProviderForAddon("deezer", "Deezer"))
     }
 
     @Test
     fun `selects exact exported handler names without normalising case`() {
         assertEquals(
-            "handleURL",
-            selectMorneyeUrlHandler(listOf("handleUrl", "handleURL"), MorneyeProviderHint.DEEZER),
-        )
-        assertEquals(
             "handleUrl",
-            selectMorneyeUrlHandler(listOf("handleUrl"), MorneyeProviderHint.DEEZER),
+            selectMorneyeUrlHandler(listOf("handleUrl", "handleURL"), MorneyeProviderHint.QOBUZ),
         )
-        assertEquals(
-            "handleUrl",
-            selectMorneyeUrlHandler(listOf("handleUrl"), MorneyeProviderHint.TIDAL),
-        )
-        assertEquals(
-            "handleUrl",
-            selectMorneyeUrlHandler(listOf("handleUrl"), MorneyeProviderHint.QOBUZ),
-        )
-        assertNull(selectMorneyeUrlHandler(listOf("handleurl"), MorneyeProviderHint.DEEZER))
         assertNull(selectMorneyeUrlHandler(listOf("handleURL"), MorneyeProviderHint.QOBUZ))
+        assertNull(selectMorneyeUrlHandler(listOf("handleurl"), MorneyeProviderHint.QOBUZ))
     }
 
     @Test
@@ -93,10 +83,10 @@ class MorneyeProviderRoutingTest {
         assertNull(morneyeUrlTrack(mapOf("type" to "album", "album" to mapOf("id" to "a"))))
         assertNull(morneyeUrlTrack(mapOf("success" to false, "error" to "bad link")))
         val track = morneyeUrlTrack(
-            mapOf("type" to "track", "track" to mapOf("id" to "deezer:123", "name" to "One")),
+            mapOf("type" to "track", "track" to mapOf("id" to "qobuz:123", "name" to "One")),
         )
         assertNotNull(track)
-        assertEquals("deezer:123", track!!["id"])
+        assertEquals("qobuz:123", track!!["id"])
     }
 
     @Test
@@ -146,24 +136,16 @@ class MorneyeProviderRoutingTest {
     @Test
     fun `availability options keep the raw provider id and merge only fills gaps`() {
         val options = morneyeAvailabilityOptions(
-            MorneyeProviderHint.DEEZER,
-            mapOf("id" to "deezer:123", "name" to "One"),
-            "deezer:123",
-            210_000,
-        )
-        assertEquals("deezer:123", options["deezer_id"])
-        assertEquals(210_000, options["duration_ms"])
-        assertEquals("deezer:123", (options["track"] as Map<*, *>)["id"])
-
-        val qobuzOptions = morneyeAvailabilityOptions(
             MorneyeProviderHint.QOBUZ,
             mapOf("id" to "qobuz:789", "name" to "Two"),
             "qobuz:789",
             null,
         )
-        assertEquals("qobuz:789", qobuzOptions["qobuz_id"])
-        assertEquals(0, qobuzOptions["duration_ms"])
-        assertNull(qobuzOptions["deezer_id"])
+        assertEquals("qobuz:789", options["qobuz_id"])
+        assertEquals(0, options["duration_ms"])
+        assertEquals("qobuz:789", (options["track"] as Map<*, *>)["id"])
+        assertFalse(options.containsKey("deezer_id"))
+        assertFalse(options.containsKey("tidal_id"))
 
         val merged = mergeMorneyeTrack(
             mapOf("id" to "1", "name" to "One"),

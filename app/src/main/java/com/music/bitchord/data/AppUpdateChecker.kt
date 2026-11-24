@@ -20,10 +20,15 @@ import okhttp3.Request
 import java.io.File
 
 /**
- * BitChord ships as a sideloaded APK off GitHub Releases rather than through
- * a store, so there's nothing to push an update notice on its own — this
- * polls the repo's "latest release" once per launch and compares its tag
+ * This fork ships as a sideloaded APK off its own GitHub Releases rather than
+ * through a store, so there's nothing to push an update notice on its own —
+ * this polls the fork's "latest release" once per launch and compares its tag
  * against the running build.
+ *
+ * Checking the upstream repository here was a trap: both builds share the
+ * `com.music.bitchord` package id, so installing an upstream APK over this
+ * fork silently replaced it and took the Mornye/Qobuz/Amazon additions with
+ * it. The URL below deliberately names this fork only.
  *
  * The update itself is also handled here: the release's `.apk` asset is
  * downloaded into the app's cache and handed to the system package installer,
@@ -43,7 +48,7 @@ object AppUpdateChecker {
     private const val CACHE_SUBDIR = "updates"
 
     private const val LATEST_RELEASE_URL =
-        "https://api.github.com/repos/kushagrasinghx/BitChord/releases/latest"
+        "https://api.github.com/repos/Didwagh/BitChord/releases/latest"
 
     private val json = Json { ignoreUnknownKeys = true }
 

@@ -6,8 +6,11 @@ import java.net.URI
 import java.util.Locale
 
 /**
- * Provider-specific URL and availability contracts shared by the Mornye
- * download addons.
+ * Provider-specific URL and availability contracts for the one Mornye provider
+ * this fork special-cases: Qobuz. Amazon Music is found through the addon's
+ * generic `customSearch` path and needs no direct-id hint here; every other
+ * provider (Tidal, Deezer, and so on) is deliberately out of scope for this
+ * fork.
  *
  * These helpers are deliberately pure (apart from the tiny retry driver at the
  * bottom) so the exact method names and return shapes can be tested without a
@@ -16,8 +19,6 @@ import java.util.Locale
  * miss an addon that exported only one of them.
  */
 internal enum class MorneyeProviderHint(val directIdField: String) {
-    DEEZER("deezer_id"),
-    TIDAL("tidal_id"),
     QOBUZ("qobuz_id"),
 }
 
@@ -26,8 +27,6 @@ internal fun morneyeUrlProvider(query: String): MorneyeProviderHint? {
     val url = query.trim()
     if (url.isBlank() || url.any { it.isWhitespace() }) return null
     val lower = url.lowercase(Locale.ROOT)
-    if (lower.startsWith("deezer:")) return MorneyeProviderHint.DEEZER
-    if (lower.startsWith("tidal:")) return MorneyeProviderHint.TIDAL
     if (lower.startsWith("qobuzapp://") || lower.startsWith("qobuz:track:") ||
         lower.startsWith("qobuz:album:") || lower.startsWith("qobuz:artist:") ||
         lower.startsWith("qobuz:playlist:")
@@ -35,33 +34,23 @@ internal fun morneyeUrlProvider(query: String): MorneyeProviderHint? {
     if (!lower.startsWith("http://") && !lower.startsWith("https://")) return null
 
     val host = runCatching { URI(url).host?.lowercase(Locale.ROOT) }.getOrNull() ?: return null
-    return when {
-        host == "deezer.com" || host == "www.deezer.com" ||
-            host == "deezer.page.link" || host == "link.deezer.com" ||
-            host.endsWith(".deezer.com") -> MorneyeProviderHint.DEEZER
-
-        host == "tidal.com" || host == "www.tidal.com" ||
-            host == "listen.tidal.com" || host.endsWith(".tidal.com") -> MorneyeProviderHint.TIDAL
-
-        // Mirrors the addon's parseURL: no wildcard subdomains here.
-        host == "qobuz.com" || host == "www.qobuz.com" ||
-            host == "play.qobuz.com" || host == "open.qobuz.com" -> MorneyeProviderHint.QOBUZ
-
+    // Mirrors the addon's parseURL: no wildcard subdomains here. Tidal and
+    // Deezer links are deliberately not routed — their addons are out of scope
+    // for this fork and would only produce misleading failures.
+    return when (host) {
+        "qobuz.com", "www.qobuz.com", "play.qobuz.com", "open.qobuz.com" ->
+            MorneyeProviderHint.QOBUZ
         else -> null
     }
 }
 
 /**
- * Exact exports to try, in order. Deezer has shipped both spellings; Tidal and
- * Qobuz ship `handleUrl`. Membership is checked with `in methods`, so the
- * runtime's case-sensitive lookup is never second-guessed.
+ * Exact export Qobuz addons ship. Membership is checked with `in methods`, so
+ * the runtime's case-sensitive lookup is never second-guessed.
  */
-internal fun morneyeUrlHandlers(provider: MorneyeProviderHint): List<String> =
-    when (provider) {
-        MorneyeProviderHint.DEEZER -> listOf("handleURL", "handleUrl")
-        MorneyeProviderHint.TIDAL -> listOf("handleUrl")
-        MorneyeProviderHint.QOBUZ -> listOf("handleUrl")
-    }
+internal fun morneyeUrlHandlers(provider: MorneyeProviderHint): List<String> = when (provider) {
+    MorneyeProviderHint.QOBUZ -> listOf("handleUrl")
+}
 
 internal fun selectMorneyeUrlHandler(
     methods: List<String>,
@@ -75,14 +64,12 @@ internal fun morneyeProviderForAddon(
 ): MorneyeProviderHint? {
     val key = addonKey.lowercase(Locale.ROOT)
     val label = displayName.lowercase(Locale.ROOT)
-    return when {
-        key == "deezer" || key.contains("deezer") || label == "deezer" ->
-            MorneyeProviderHint.DEEZER
-        key == "tidal-web" || key.contains("tidal") || label == "tidal" ->
-            MorneyeProviderHint.TIDAL
-        key == "qobuz-web" || key.contains("qobuz") || label == "qobuz" ->
-            MorneyeProviderHint.QOBUZ
-        else -> null
+    return if (key == "qobuz-web" || key.contains("qobuz") || label == "qobuz") {
+        MorneyeProviderHint.QOBUZ
+    } else {
+        // Amazon Music reaches us through customSearch and the addon's own id;
+        // it must not inherit Qobuz's availability options.
+        null
     }
 }
 

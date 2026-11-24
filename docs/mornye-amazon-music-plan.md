@@ -10,7 +10,6 @@ grep before relying on an exact offset. Short forms are intentional.
 | `BC/...` | `/data/data/com.termux/files/home/BitChord/` |
 | `DIAG13` | `/storage/emulated/0/Download/BitChord/Diagnostics/bitchord-diagnostics (13).txt` |
 | CENC report | `BC/docs/mornye-amazon-cenc-report.md` (decryption/KID history) |
-| Tidal plan | `BC/docs/mornye-tidal-plan.md` |
 
 ## Status legend
 

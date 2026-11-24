@@ -637,7 +637,7 @@ fun SettingsScreen(
                     title = exportDownloadsTitle,
                     checked = exportDownloads,
                     onCheckedChange = AppSettings::setExportDownloads,
-                    subtitle = "New downloads to Music/BitChord · existing files are not converted",
+                    subtitle = "On by default · new downloads to Music/BitChord · existing files are not converted",
                 )
             }
             val syncPlaylistsTitle = stringResource(R.string.sync_downloaded_playlists)
