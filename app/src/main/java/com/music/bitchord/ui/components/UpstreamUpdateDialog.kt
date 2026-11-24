@@ -88,7 +88,7 @@ fun UpstreamUpdateDialog(
                 horizontalAlignment = Alignment.CenterHorizontally,
             ) {
                 Text(
-                    text = stringResource(R.string.upstream_update_title),
+                    text = "Upstream BitChord update",
                     style = MaterialTheme.typography.bodyLarge.copy(
                         fontSize = 17.sp,
                         fontWeight = FontWeight.W600,
@@ -97,7 +97,7 @@ fun UpstreamUpdateDialog(
                     textAlign = TextAlign.Center,
                 )
                 Text(
-                    text = stringResource(R.string.upstream_update_body, release.tag),
+                    text = "Latest upstream release is ${release.tag}. This app will not install it — that would replace your fork. Copy the OpenCode prompt to sync it safely; the fork update will then appear here.",
                     modifier = Modifier.padding(top = 4.dp),
                     style = MaterialTheme.typography.bodyMedium.copy(
                         fontSize = 13.sp,
@@ -110,7 +110,7 @@ fun UpstreamUpdateDialog(
 
             AlertRule()
             AlertAction(
-                label = stringResource(R.string.copy_opencode_prompt),
+                label = "Copy OpenCode Prompt",
                 emphasised = true,
                 onClick = onCopyPrompt,
             )

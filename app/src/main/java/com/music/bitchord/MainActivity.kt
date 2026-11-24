@@ -5459,7 +5459,7 @@ private fun BitChordApp(
                     },
                     onCopyPrompt = {
                         clipboard.setText(AnnotatedString(UpstreamUpdateChecker.openCodePrompt(release)))
-                        Toast.makeText(context, R.string.upstream_prompt_copied, Toast.LENGTH_LONG).show()
+                        Toast.makeText(context, "Prompt copied · paste it into OpenCode in Termux", Toast.LENGTH_LONG).show()
                         UpstreamUpdateChecker.dismiss(context)
                         showUpstreamDialog = false
                     },

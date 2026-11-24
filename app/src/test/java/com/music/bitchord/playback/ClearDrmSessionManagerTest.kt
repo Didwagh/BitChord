@@ -5,6 +5,7 @@ import androidx.media3.common.DrmInitData
 import androidx.media3.common.Format
 import androidx.media3.common.MediaItem
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotSame
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertSame
 import org.junit.Test
@@ -36,9 +37,18 @@ class ClearDrmSessionManagerTest {
     }
 
     @Test
-    fun `provider uses the clear manager for items without a DRM configuration`() {
-        val item = MediaItem.Builder().setMediaId("src:mornye::B079TNV7WL").build()
+    fun `provider uses the clear manager for ordinary items without a DRM configuration`() {
+        val item = MediaItem.Builder().setMediaId("ordinary-youtube-id").build()
 
         assertSame(ClearDrmSessionManager, clearAwareDrmSessionManagerProvider().get(item))
+    }
+
+    @Test
+    fun `provider defers source-backed items until their addon key is known`() {
+        // A src: id is the queue's (configId, trackId) pair, so it deliberately
+        // gets the deferred manager instead of the plain clear one.
+        val item = MediaItem.Builder().setMediaId("src:mornye::B079TNV7WL").build()
+
+        assertNotSame(ClearDrmSessionManager, clearAwareDrmSessionManagerProvider().get(item))
     }
 }
