@@ -5901,12 +5901,12 @@ private fun BitChordApp(
                     onOpenSources = {
                         showMornyeVerification = false
                         MorneyeVerificationSignal.dismiss()
-                        if (pageRoute != AppRoute.Mornye) navigator.push(AppRoute.Mornye)
+                        if (route != AppRoute.Mornye) navigator.push(AppRoute.Mornye)
                     },
                     onCopySteps = {
                         clipboard.setText(
                             AnnotatedString(
-                                stringResource(R.string.mornye_verification_steps, event.displayName),
+                                context.getString(R.string.mornye_verification_steps, event.displayName),
                             ),
                         )
                         Toast.makeText(
