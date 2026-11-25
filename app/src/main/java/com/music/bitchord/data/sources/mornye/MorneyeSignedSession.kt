@@ -275,8 +275,21 @@ internal class MorneyeSignedSession(
                 continue
             }
 
-            val reset = response.status == 401 && origin == "gateway" && code == "SESSION_INVALID"
-            val verify = response.status == 428 && origin == "gateway" && code == "VERIFY_REQUIRED"
+            // Only gateway answers describe this app's own session. A
+            // provider-origin 401/403 means the listener's account at that
+            // service needs attention, not that our Mornye grant is bad.
+            val expiredCode = code == "SESSION_INVALID" || code == "SESSION_EXPIRED" ||
+                code.contains("EXPIRED")
+            val verifyCode = code == "VERIFY_REQUIRED" || code == "VERIFICATION_REQUIRED" ||
+                code.contains("VERIFICATION")
+            val structuredVerify = contract.optBoolean("needsVerification") ||
+                contract.optString("error").contains("VERIFY_REQUIRED", ignoreCase = true)
+            val reset = response.status == 401 && origin == "gateway" && expiredCode
+            val verify = structuredVerify ||
+                (origin == "gateway" && (
+                    (response.status == 428 && (verifyCode || code.isEmpty())) ||
+                        (response.status == 403 && verifyCode)
+                    ))
             if ((reset || verify) && sessionRetries < 1) {
                 sessionRetries++
                 if (reset) {
@@ -708,6 +721,9 @@ internal class MorneyeSignedSession(
         contract.optString("code").takeIf { it.isNotBlank() }?.let {
             put("code", it)
             put("error_code", it)
+        }
+        if (contract.has("needsVerification")) {
+            put("needsVerification", contract.optBoolean("needsVerification"))
         }
         contract.optString("origin").takeIf { it.isNotBlank() }?.let { put("error_origin", it) }
         contract.optString("action").takeIf { it.isNotBlank() }?.let { put("error_action", it) }

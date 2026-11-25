@@ -1264,6 +1264,15 @@
     <string name="source_needs_lossless_output">Needs a lossless output · use a lossless supported device</string>
     <string name="source_needs_lossless_bt_codec">Needs a lossless output · Bluetooth is on %1$s; use a lossless supported device</string>
     <string name="source_needs_lossless_bt_unknown">Needs a lossless output · can’t tell which Bluetooth codec is in use</string>
+    <string name="mornye_output_reencodes" translatable="false">Source can supply lossless · this output will re-encode it</string>
+    <string name="mornye_output_reencodes_codec" translatable="false">Source can supply lossless · this output (%1$s) will re-encode it</string>
+    <string name="mornye_output_reencodes_unknown" translatable="false">Source can supply lossless · Bluetooth codec unknown</string>
+    <string name="mornye_verification_title" translatable="false">Mornye session expired</string>
+    <string name="mornye_verification_body" translatable="false">%1$s needs verification or its Mornye session expired. Open Mornye Extensions → %1$s → Connect, approve in the browser, then return to BitChord. If the link no longer works, re-add the Mornye session for %1$s.</string>
+    <string name="mornye_verification_open" translatable="false">Open Mornye Extensions</string>
+    <string name="mornye_verification_copy_steps" translatable="false">Copy connect steps</string>
+    <string name="mornye_verification_steps" translatable="false">Open BitChord → Sources → Mornye Extensions → %1$s → Connect. Approve in the browser, then return to BitChord. If no redirect returns, re-add the Mornye session for %1$s.</string>
+    <string name="mornye_verification_steps_copied" translatable="false">Connect steps copied</string>
     <string name="source_downloads_on">Downloads allowed</string>
     <string name="source_downloads_off">Streaming only</string>
     <string name="lossless_output_permission">Check Bluetooth codec</string>

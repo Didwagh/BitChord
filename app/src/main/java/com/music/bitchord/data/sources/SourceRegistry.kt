@@ -60,9 +60,20 @@ data class SourceConfig(
     /** True when the manifest could not be fetched and was last seen without `bitchordAuth`. */
     val isOutdated: Boolean = false,
 ) {
-    /** Whether this source is shut out right now because it needs an output that isn't connected. */
+    /**
+     * Whether this source asks for a lossless output that is not connected.
+     *
+     * Advisory for Mornye: its FLAC bytes are still worth fetching over AAC —
+     * Android will re-encode for the earbud, but the file and the cache stay
+     * lossless. Only legacy addons, whose manifest promised not to be called
+     * without a qualifying output, are actually shut out.
+     */
     val awaitsLosslessOutput: Boolean
         get() = checkValidLossless && !LosslessOutput.capable
+
+    /** Whether the output gate keeps this source out of the walks entirely. */
+    val blocksPlayback: Boolean
+        get() = awaitsLosslessOutput && kind != SourceKind.MORNYE
 
     /** The two manifest switches, without the parts of the config the user set. */
     internal fun withPolicyOf(other: SourceConfig) =
@@ -193,10 +204,11 @@ object SourceRegistry {
      */
     fun active(): List<MusicSource> =
         enabledConfigs(configs.value)
-            // Not in the walk at all while it would be refused anyway: an addon
-            // that asked for a lossless output costs nothing — not even a timed
-            // out search — while there isn't one. See [SourceConfig.checkValidLossless].
-            .filterNot { it.awaitsLosslessOutput }
+            // Not in the walk at all while it would be refused anyway: a legacy
+            // addon that asked for a lossless output costs nothing — not even a
+            // timed out search — while there isn't one. Mornye stays in the
+            // walk: its FLAC is still useful when this output re-encodes it.
+            .filterNot { it.blocksPlayback }
             .sortedBy { it.kind.rank }
             .mapNotNull { instances[it.id] }
 
@@ -231,7 +243,7 @@ object SourceRegistry {
             .mapNotNull { config ->
                 when {
                     !config.allowDownloads -> config to DownloadExclusion.DOWNLOADS_NOT_ALLOWED
-                    config.awaitsLosslessOutput -> config to DownloadExclusion.NEEDS_LOSSLESS_OUTPUT
+                    config.blocksPlayback -> config to DownloadExclusion.NEEDS_LOSSLESS_OUTPUT
                     else -> null
                 }
             }

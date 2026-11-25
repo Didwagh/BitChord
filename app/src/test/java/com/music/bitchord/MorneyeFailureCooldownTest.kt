@@ -56,4 +56,14 @@ class MorneyeFailureCooldownTest {
         MorneyeFailureCooldown.record(key)
         assertFalse(MorneyeFailureCooldown.isCoolingDown(cd))
     }
+
+    @Test
+    fun `a confirmed reconnect clears every candidate for that addon`() {
+        val otherAddon = MorneyeFailureCooldown.key("some-other-addon", "535662896", "LOSSLESS")
+        MorneyeFailureCooldown.record(key)
+        MorneyeFailureCooldown.record(otherAddon)
+        MorneyeFailureCooldown.clearAddon("ff9e6812d4")
+        assertFalse(MorneyeFailureCooldown.isCoolingDown(key))
+        assertTrue(MorneyeFailureCooldown.isCoolingDown(otherAddon))
+    }
 }

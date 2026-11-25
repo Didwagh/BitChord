@@ -37,6 +37,16 @@ internal object MorneyeFailureCooldown {
         failures.remove(key)
     }
 
+    /**
+     * Forgets every failed track for one extension. Called only after a
+     * confirmed reconnect: dismissing a prompt or merely opening the connect
+     * page is not proof that the session was repaired.
+     */
+    fun clearAddon(addonKey: String) {
+        val prefix = "$addonKey\u0000"
+        failures.keys.removeIf { it.startsWith(prefix) }
+    }
+
     /** Test hook. */
     fun clearAll() = failures.clear()
 }

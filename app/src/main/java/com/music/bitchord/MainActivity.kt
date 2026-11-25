@@ -164,6 +164,7 @@ import com.music.bitchord.data.scrobbling.LastFM
 import com.music.bitchord.data.settings.AppSettings
 import com.music.bitchord.data.settings.BitPerfectMode
 import com.music.bitchord.data.sources.mornye.MorneyePackageManager
+import com.music.bitchord.data.sources.mornye.MorneyeVerificationSignal
 import com.music.bitchord.ui.AddonBlockedAlert
 import com.music.bitchord.data.settings.LibrarySort
 import com.music.bitchord.data.settings.ThemeMode
@@ -294,6 +295,7 @@ import com.music.bitchord.data.sources.SourceKind
 import com.music.bitchord.data.sources.SourceRegistry
 import com.music.bitchord.ui.components.ListenBrainzTokenAlert
 import com.music.bitchord.ui.components.MiniPlayer
+import com.music.bitchord.ui.components.MornyeVerificationDialog
 import com.music.bitchord.ui.components.QueueActionNotice
 import com.music.bitchord.ui.components.QueueActionNoticeHost
 import com.music.bitchord.ui.components.TopBarAccountButton
@@ -928,6 +930,28 @@ private fun BitChordApp(
     val updateAvailable by viewModel.updateAvailable.collectAsStateWithLifecycle()
     var showUpstreamDialog by rememberSaveable { mutableStateOf(false) }
     val upstreamNotice by viewModel.upstreamUpdateAvailable.collectAsStateWithLifecycle()
+
+    // A Mornye verification failure is reported from the source layer, where
+    // the actual 401/428 happened. One prompt per addon per cooldown window is
+    // enough; the source can keep falling back to YouTube while it waits.
+    val mornyeEvent by MorneyeVerificationSignal.event.collectAsStateWithLifecycle()
+    var showMornyeVerification by rememberSaveable { mutableStateOf(false) }
+    val mornyeSessionRevision by MorneyePackageManager.sessionRevision.collectAsStateWithLifecycle()
+
+    LaunchedEffect(mornyeEvent) {
+        if (mornyeEvent != null) showMornyeVerification = true
+    }
+
+    // A confirmed reconnect clears the prompt and its failure cooldown. This
+    // watches the same revision the signed-session manager bumps on success.
+    LaunchedEffect(mornyeSessionRevision) {
+        if (mornyeSessionRevision == 0L) return@LaunchedEffect
+        val key = mornyeEvent?.addonKey ?: return@LaunchedEffect
+        if (MorneyePackageManager.signedSessionStatus(key)?.authenticated == true) {
+            MorneyeVerificationSignal.clear(key)
+            showMornyeVerification = false
+        }
+    }
 
     /**
      * The single gate both surfaces read, so the icon can't announce the update
@@ -3018,6 +3042,10 @@ private fun BitChordApp(
         BackHandler(enabled = showUpstreamDialog) {
             upstreamNotice?.let { UpstreamUpdateChecker.dismiss(context) }
             showUpstreamDialog = false
+        }
+        BackHandler(enabled = showMornyeVerification) {
+            showMornyeVerification = false
+            MorneyeVerificationSignal.dismiss()
         }
         BackHandler(enabled = showListenBrainzLogin) { showListenBrainzLogin = false }
         BackHandler(enabled = showLastfmLogin) { showLastfmLogin = false }
@@ -5858,6 +5886,38 @@ private fun BitChordApp(
                         context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(release.releaseUrl)))
                         UpstreamUpdateChecker.dismiss(context)
                         showUpstreamDialog = false
+                    },
+                )
+            }
+        }
+
+        // This prompt is about the listener's own accounts, so it outranks
+        // release news: opening it lands directly on Mornye Extensions.
+        if (showMornyeVerification && onboardingComplete) {
+            mornyeEvent?.let { event ->
+                MornyeVerificationDialog(
+                    displayName = event.displayName,
+                    hazeState = hazeState,
+                    onOpenSources = {
+                        showMornyeVerification = false
+                        MorneyeVerificationSignal.dismiss()
+                        if (pageRoute != AppRoute.Mornye) navigator.push(AppRoute.Mornye)
+                    },
+                    onCopySteps = {
+                        clipboard.setText(
+                            AnnotatedString(
+                                stringResource(R.string.mornye_verification_steps, event.displayName),
+                            ),
+                        )
+                        Toast.makeText(
+                            context,
+                            R.string.mornye_verification_steps_copied,
+                            Toast.LENGTH_LONG,
+                        ).show()
+                    },
+                    onDismiss = {
+                        showMornyeVerification = false
+                        MorneyeVerificationSignal.dismiss()
                     },
                 )
             }

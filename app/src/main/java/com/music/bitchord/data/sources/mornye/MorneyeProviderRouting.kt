@@ -103,11 +103,33 @@ private fun flagOf(value: Any?): Boolean? = when (value) {
     else -> null
 }
 
-/** A verification failure needs a user action, not a retry or a false empty result. */
-internal fun morneyeVerificationRequired(error: Throwable?): Boolean {
-    val message = error?.message.orEmpty()
-    return message.contains("VERIFY_REQUIRED", ignoreCase = true) ||
-        message.contains("verification_required", ignoreCase = true)
+/**
+ * A verification failure needs a user action, not a retry or a false empty
+ * result.
+ *
+ * Addons do not agree on the spelling: the signed-session bridge emits
+ * `VERIFY_REQUIRED`, while the Amazon addon returns `Verification required`
+ * from `download()`. Session-expiry and re-add wording mean the same thing to
+ * the listener, so all of them feed the one prompt.
+ */
+private val VERIFICATION_TEXT = Regex(
+    """(?i)(verify[_ -]?required|verification[_ -]?required|""" +
+        """needs[_ -]?verification|session.{0,20}(expired|invalid|revoked)|""" +
+        """re[- ]?add[_ -]?session)""",
+)
+
+internal fun morneyeVerificationText(text: String?): Boolean =
+    !text.isNullOrBlank() && VERIFICATION_TEXT.containsMatchIn(text)
+
+internal fun morneyeVerificationRequired(error: Throwable?): Boolean =
+    morneyeVerificationText(error?.message)
+
+/** Structured verification answers returned as values, not thrown. */
+internal fun morneyeVerificationResult(value: Any?): Boolean {
+    val map = morneyeResultMap(value) ?: return false
+    if (flagOf(map["needsVerification"]) == true) return true
+    if (morneyeVerificationText(firstText(map["error"], map["error_message"], map["reason"]))) return true
+    return morneyeVerificationText(firstText(map["error_code"], map["code"]))
 }
 
 /**

@@ -10,6 +10,7 @@ import com.music.bitchord.data.sources.mornye.MorneyePackageManager
 import com.music.bitchord.data.sources.mornye.MorneyeProviderHint
 import com.music.bitchord.data.sources.mornye.MorneyeQualityOption
 import com.music.bitchord.data.sources.mornye.MorneyeRuntime
+import com.music.bitchord.data.sources.mornye.MorneyeVerificationSignal
 import com.music.bitchord.data.sources.mornye.isAtmosClaim
 import com.music.bitchord.data.sources.mornye.isLosslessCodec
 import com.music.bitchord.data.sources.mornye.isMorneyeTrackItem
@@ -21,6 +22,7 @@ import com.music.bitchord.data.sources.mornye.morneyeResultMap
 import com.music.bitchord.data.sources.mornye.morneyeUrlProvider
 import com.music.bitchord.data.sources.mornye.morneyeUrlTrack
 import com.music.bitchord.data.sources.mornye.morneyeVerificationRequired
+import com.music.bitchord.data.sources.mornye.morneyeVerificationText
 import com.music.bitchord.data.sources.mornye.normaliseCodec
 import com.music.bitchord.data.sources.mornye.normaliseJsonLike
 import com.music.bitchord.data.sources.mornye.parseMorneyeAvailability
@@ -70,6 +72,16 @@ class MorneyeSource(
     override val displayName: String get() = config.displayName
 
     val addonKey: String get() = config.baseUrl
+
+    /**
+     * Raises the one in-app prompt for a verification-shaped failure. Called
+     * from every search/availability/download path because the failure can
+     * arrive as a thrown exception, a `{success:false}` value, or an addon log
+     * line that only contains the reason text.
+     */
+    private fun reportVerification() {
+        MorneyeVerificationSignal.report(addonKey, displayName)
+    }
 
     /**
      * The runtime whose `initialize()` has already run.
@@ -166,6 +178,7 @@ class MorneyeSource(
             val callError = morneyeCallError(resolved)
             if (callError != null) {
                 TrackLog.w(TAG, "[$addonKey] $handler: $callError")
+                if (morneyeVerificationText(callError)) reportVerification()
                 return@withContext emptyList()
             }
             val trackMap = morneyeUrlTrack(resolved)
@@ -206,10 +219,21 @@ class MorneyeSource(
                     "[$addonKey] search needs provider verification; " +
                         "open Mornye Extensions → $displayName → Connect",
                 )
+                reportVerification()
             } else {
                 TrackLog.w(TAG, "[$addonKey] search error: ${it.message}")
             }
         }.getOrNull() ?: return@withContext emptyList()
+
+        // Some addons throw on verification; Qobuz reports it as a value in
+        // the signed-session contract. Both need the same user action.
+        morneyeCallError(raw)?.let { callError ->
+            if (morneyeVerificationText(callError)) {
+                TrackLog.w(TAG, "[$addonKey] search: $callError")
+                reportVerification()
+                return@withContext emptyList()
+            }
+        }
 
         val items: List<Any?> = when (raw) {
             is List<*>      -> raw
@@ -328,11 +352,14 @@ class MorneyeSource(
             )
         }.onFailure {
             when {
-                morneyeVerificationRequired(it) -> TrackLog.w(
-                    TAG,
-                    "[$addonKey] availability needs provider verification; " +
-                        "open Mornye Extensions → $displayName → Connect",
-                )
+                morneyeVerificationRequired(it) -> {
+                    TrackLog.w(
+                        TAG,
+                        "[$addonKey] availability needs provider verification; " +
+                            "open Mornye Extensions → $displayName → Connect",
+                    )
+                    reportVerification()
+                }
                 it is MorneyeAddonException ->
                     TrackLog.d(TAG, "[$addonKey] availability: ${it.message}")
                 else -> TrackLog.w(TAG, "[$addonKey] availability failed: ${it.message}")
@@ -439,6 +466,10 @@ class MorneyeSource(
                 } else null
                 if (availability != null && !availability.available) {
                     discardPartialDownload(addonCacheDir, fileBase)
+                    if (morneyeVerificationText(availability.reason)) {
+                        reportVerification()
+                        return@withContext null
+                    }
                     MorneyeFailureCooldown.record(failKey)
                     TrackLog.d(
                         TAG,
@@ -469,14 +500,26 @@ class MorneyeSource(
                 // time is the honest answer to "why did one candidate take
                 // 40s?".
                 val startedAt = System.currentTimeMillis()
+                var downloadFailure: Throwable? = null
                 val downloadResult = runCatching {
                     rt.invoke(
                         "download",
                         listOf(downloadTrackId, quality?.id, outputPath, null, options),
                     )
                 }.onFailure {
-                    if (it is MorneyeAddonException) TrackLog.d(TAG, "[$addonKey] addon: ${it.message}")
-                    else TrackLog.w(TAG, "[$addonKey] download failed: ${it.message}")
+                    downloadFailure = it
+                    if (morneyeVerificationRequired(it)) {
+                        TrackLog.w(
+                            TAG,
+                            "[$addonKey] download needs provider verification; " +
+                                "open Mornye Extensions → $displayName → Connect",
+                        )
+                        reportVerification()
+                    } else if (it is MorneyeAddonException) {
+                        TrackLog.d(TAG, "[$addonKey] addon: ${it.message}")
+                    } else {
+                        TrackLog.w(TAG, "[$addonKey] download failed: ${it.message}")
+                    }
                 }.getOrNull()
                 val elapsedMs = System.currentTimeMillis() - startedAt
                 if (downloadResult == null) {
@@ -485,6 +528,10 @@ class MorneyeSource(
                     // cannot tell it from a complete one — the next play would
                     // reuse the stub and fail at the first sample. Delete it.
                     discardPartialDownload(addonCacheDir, fileBase)
+                    if (morneyeVerificationRequired(downloadFailure)) {
+                        reportVerification()
+                        return@withContext null
+                    }
                     MorneyeFailureCooldown.record(failKey)
                     TrackLog.w(TAG, "[$addonKey] download for $rawTrackId returned nothing after ${elapsedMs}ms")
                     return@withContext null
@@ -500,6 +547,18 @@ class MorneyeSource(
 
                 if (!parsed.success) {
                     discardPartialDownload(addonCacheDir, fileBase)
+                    if (morneyeVerificationText(parsed.errorMessage)) {
+                        // Amazon's exact failure is "Verification required".
+                        // A 90s cooldown here only hides a fixed session for a
+                        // minute and a half, so prompt instead of cooling down.
+                        TrackLog.w(
+                            TAG,
+                            "[$addonKey] download needs provider verification after ${elapsedMs}ms: " +
+                                "${parsed.errorMessage}",
+                        )
+                        reportVerification()
+                        return@withContext null
+                    }
                     MorneyeFailureCooldown.record(failKey)
                     TrackLog.w(
                         TAG,

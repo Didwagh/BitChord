@@ -152,7 +152,7 @@ fun SourcesScreen(
     val probeKey = configs.filter { it.kind.needsServer }
         .joinToString { "${it.id}@${it.baseUrl}@${it.checkValidLossless}" } + "@${losslessOutput.capable}"
     LaunchedEffect(probeKey) {
-        configs.filter { it.kind.needsServer && it.isComplete && !it.awaitsLosslessOutput }.forEach { config ->
+        configs.filter { it.kind.needsServer && it.isComplete && !it.blocksPlayback }.forEach { config ->
             val source = SourceRegistry.instance(config.id) ?: return@forEach
             health[config.id] = withContext(Dispatchers.IO) {
                 runCatching { source.health() }
@@ -240,7 +240,12 @@ fun SourcesScreen(
                         // connection keeps meaning "…and here is what it costs
                         // today".
                         skippedByQuality = config.enabled && !ceiling.permits(config.kind),
-                        awaitingOutput = if (config.enabled && config.awaitsLosslessOutput) losslessOutput else null,
+                        awaitingOutput = if (config.enabled && config.blocksPlayback) losslessOutput else null,
+                        // Mornye is still used over AAC, but the listener should
+                        // know the earbud will re-encode the source's FLAC.
+                        losslessOutputAdvisory = if (config.enabled && config.kind == SourceKind.MORNYE &&
+                            config.awaitsLosslessOutput
+                        ) losslessOutput else null,
                         onMetered = metered == true,
                         ceiling = ceiling,
                         // Anything the user configured is theirs to edit or
@@ -283,7 +288,7 @@ fun SourcesScreen(
             // headphones on LDAC, LHDC or SSC UHQ whose codec Android won't name without
             // the Nearby devices permission. Offered only then, and only from
             // here, where the reason for asking is on screen.
-            val waiting = configs.any { it.enabled && it.awaitsLosslessOutput }
+            val waiting = configs.any { it.enabled && it.blocksPlayback }
             if (waiting && losslessOutput.bluetoothCodecUnknown) {
                 RowDivider()
                 BluetoothCodecPermissionRow()
@@ -810,6 +815,8 @@ private fun SourceRow(
     skippedByQuality: Boolean = false,
     /** On, but its addon needs a lossless output and this is what is connected instead. Null when not waiting. */
     awaitingOutput: LosslessOutput.State? = null,
+    /** Mornye can serve FLAC but this output will re-encode it. Not a block. */
+    losslessOutputAdvisory: LosslessOutput.State? = null,
     /** Which of the two ceilings [ceiling] is, so the row can name it. */
     onMetered: Boolean = false,
     ceiling: AudioQuality = AudioQuality.LOSSLESS,
@@ -884,6 +891,16 @@ private fun SourceRow(
                             stringResource(R.string.source_needs_lossless_bt_codec, awaitingOutput.bluetoothCodec)
                         else -> stringResource(R.string.source_needs_lossless_output)
                     }
+                    losslessOutputAdvisory != null -> when {
+                        losslessOutputAdvisory.bluetoothCodecUnknown ->
+                            stringResource(R.string.mornye_output_reencodes_unknown)
+                        losslessOutputAdvisory.bluetoothCodec != null ->
+                            stringResource(
+                                R.string.mornye_output_reencodes_codec,
+                                losslessOutputAdvisory.bluetoothCodec,
+                            )
+                        else -> stringResource(R.string.mornye_output_reencodes)
+                    }
                     skippedByQuality -> stringResource(
                         R.string.source_skipped_by_quality,
                         stringResource(if (onMetered) R.string.mobile_data else R.string.wifi),
@@ -896,6 +913,9 @@ private fun SourceRow(
                     // A warning, not a fault: the addon is fine, the output is
                     // what has to change — but it is something to act on.
                     awaitingOutput != null -> MaterialTheme.colorScheme.error
+                    // A source can still be lossless even when the output is
+                    // not: this is information, not a fault.
+                    losslessOutputAdvisory != null -> MaterialTheme.colorScheme.onSurfaceVariant
                     // Only a rejection is coloured, and only when it is what
                     // the line actually says. A server that is merely down
                     // will be up again without anyone doing anything, and

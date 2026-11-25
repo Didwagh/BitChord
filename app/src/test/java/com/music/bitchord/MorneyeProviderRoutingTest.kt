@@ -8,6 +8,8 @@ import com.music.bitchord.data.sources.mornye.morneyeProviderForAddon
 import com.music.bitchord.data.sources.mornye.morneyeUrlProvider
 import com.music.bitchord.data.sources.mornye.morneyeUrlTrack
 import com.music.bitchord.data.sources.mornye.morneyeVerificationRequired
+import com.music.bitchord.data.sources.mornye.morneyeVerificationResult
+import com.music.bitchord.data.sources.mornye.morneyeVerificationText
 import com.music.bitchord.data.sources.mornye.parseMorneyeAvailability
 import com.music.bitchord.data.sources.mornye.resolveMorneyeAvailability
 import com.music.bitchord.data.sources.mornye.selectMorneyeUrlHandler
@@ -74,8 +76,25 @@ class MorneyeProviderRoutingTest {
     fun `verification failures are recognised for user-facing diagnostics`() {
         assertTrue(morneyeVerificationRequired(IllegalStateException("VERIFY_REQUIRED")))
         assertTrue(morneyeVerificationRequired(IllegalStateException("verification_required")))
+        // Amazon's addon returns this exact text from download().
+        assertTrue(morneyeVerificationRequired(IllegalStateException("Verification required")))
+        assertTrue(morneyeVerificationText("Session expired — please re-add Mornye session"))
+        assertTrue(morneyeVerificationText("needs verification"))
         assertFalse(morneyeVerificationRequired(IllegalStateException("HTTP 503")))
         assertFalse(morneyeVerificationRequired(null))
+    }
+
+    @Test
+    fun `structured verification answers are recognised without reading secrets`() {
+        assertTrue(morneyeVerificationResult(JSONObject("""{"needsVerification":true,"auth_url":"secret"}""")))
+        assertTrue(morneyeVerificationResult(mapOf("success" to false, "error" to "VERIFY_REQUIRED")))
+        assertTrue(
+            morneyeVerificationResult(
+                mapOf("success" to false, "error_code" to "SESSION_EXPIRED"),
+            ),
+        )
+        assertFalse(morneyeVerificationResult(mapOf("success" to false, "error" to "HTTP 503")))
+        assertFalse(morneyeVerificationResult(null))
     }
 
     @Test

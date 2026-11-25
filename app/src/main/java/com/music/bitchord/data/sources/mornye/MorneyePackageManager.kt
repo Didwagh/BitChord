@@ -317,6 +317,10 @@ object MorneyePackageManager {
                 result.optString("error").ifBlank { "Signed-session exchange failed" },
             )
         }
+        // A confirmed reconnect is the only time a failed candidate is allowed
+        // again immediately. Opening the connect page is not enough.
+        MorneyeFailureCooldown.clearAddon(key)
+        MorneyeVerificationSignal.clear(key)
         bumpSessionRevision()
         signedSessionStatus(key)
     }
@@ -350,6 +354,8 @@ object MorneyePackageManager {
                 if (!status.authUrl.contains("state=$state")) continue
                 val result = session.completeGrant(raw)
                 if (result.optBoolean("success")) {
+                    MorneyeFailureCooldown.clearAddon(pkg.key)
+                    MorneyeVerificationSignal.clear(pkg.key)
                     bumpSessionRevision()
                     TrackLog.d(TAG, "Signed session connected for ${pkg.displayName}")
                     return@withContext pkg

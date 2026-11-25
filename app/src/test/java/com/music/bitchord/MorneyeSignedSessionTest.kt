@@ -272,6 +272,116 @@ class MorneyeSignedSessionTest {
     }
 
     @Test
+    fun `an expired gateway session bootstraps a new session and retries`() {
+        var bootstraps = 0
+        var tickets = 0
+        server.dispatcher = object : Dispatcher() {
+            override fun dispatch(request: RecordedRequest): MockResponse {
+                return when {
+                    request.path?.startsWith("/v2/bootstrap") == true -> {
+                        bootstraps++
+                        json(200, sessionJson("sess$bootstraps", "secret$bootstraps", now + 7_200_000))
+                    }
+                    request.path == "/v2/tickets" -> {
+                        tickets++
+                        if (tickets == 1) {
+                            json(
+                                401,
+                                """{"error":"session expired","code":"SESSION_EXPIRED","origin":"gateway","action":"bootstrap_session"}""",
+                            )
+                        } else {
+                            json(200, """{"ticket_id":"ok"}""")
+                        }
+                    }
+                    else -> MockResponse().setResponseCode(404)
+                }
+            }
+        }
+        val record = MorneyeSignedSessionRecord(
+            installId = "install",
+            sessionId = "old",
+            sessionSecret = "oldsecret",
+            expiresAt = iso(now + 7_200_000),
+        )
+        store.put("signed_session:" + namespace(), record.toJson().toString())
+
+        val response = session().signedFetch("POST", "/tickets", "{}", emptyMap())
+
+        assertEquals(200, response.getInt("statusCode"))
+        assertEquals(1, bootstraps)
+        assertEquals(2, tickets)
+    }
+
+    @Test
+    fun `a gateway verification challenge is forwarded to the addon`() {
+        var bootstraps = 0
+        var tickets = 0
+        server.dispatcher = object : Dispatcher() {
+            override fun dispatch(request: RecordedRequest): MockResponse {
+                return when {
+                    request.path?.startsWith("/v2/bootstrap") == true -> {
+                        bootstraps++
+                        json(200, """{"challenge_id":"chl_$bootstraps","server_nonce":"n","expires_in":300}""")
+                    }
+                    request.path == "/v2/tickets" -> {
+                        tickets++
+                        json(
+                            403,
+                            """{"error":"verification required","code":"VERIFY_REQUIRED","origin":"gateway"}""",
+                        )
+                    }
+                    else -> MockResponse().setResponseCode(404)
+                }
+            }
+        }
+        val record = MorneyeSignedSessionRecord(
+            installId = "install",
+            sessionId = "old",
+            sessionSecret = "oldsecret",
+            expiresAt = iso(now + 7_200_000),
+        )
+        store.put("signed_session:" + namespace(), record.toJson().toString())
+
+        val response = session().signedFetch("POST", "/tickets", "{}", emptyMap())
+
+        assertTrue(response.optBoolean("needsVerification"))
+        assertEquals("VERIFY_REQUIRED", response.optString("error"))
+        assertEquals(1, bootstraps)
+        assertEquals(1, tickets)
+    }
+
+    @Test
+    fun `a provider auth failure does not reset the Mornye session`() {
+        var bootstraps = 0
+        server.dispatcher = object : Dispatcher() {
+            override fun dispatch(request: RecordedRequest): MockResponse = when {
+                request.path?.startsWith("/v2/bootstrap") == true -> {
+                    bootstraps++
+                    json(200, sessionJson("sess", "secret", now + 7_200_000))
+                }
+                request.path == "/v2/tickets" -> json(
+                    401,
+                    """{"error":"login expired","code":"SESSION_EXPIRED","origin":"provider"}""",
+                )
+                else -> MockResponse().setResponseCode(404)
+            }
+        }
+        val record = MorneyeSignedSessionRecord(
+            installId = "install",
+            sessionId = "old",
+            sessionSecret = "oldsecret",
+            expiresAt = iso(now + 7_200_000),
+        )
+        store.put("signed_session:" + namespace(), record.toJson().toString())
+
+        val response = session().signedFetch("POST", "/tickets", "{}", emptyMap())
+
+        assertEquals(401, response.getInt("statusCode"))
+        assertEquals("provider", response.optString("error_origin"))
+        assertEquals(0, bootstraps)
+    }
+
+    @Test
     fun `provider unavailable retries the same operation`() {
         var tickets = 0
         server.dispatcher = object : Dispatcher() {
