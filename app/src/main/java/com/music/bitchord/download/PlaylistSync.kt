@@ -336,10 +336,14 @@ object PlaylistSync {
         val fetch = missing.map { song ->
             if (song.thumbnailUrl.isNullOrBlank() && cover != null) song.copy(thumbnailUrl = cover) else song
         }
-        val savedAddon = AppSettings.defaultDownloadAddonKey.value?.trim()?.takeIf { it.isNotEmpty() }
-        val defaultChoice = savedAddon
-            ?.takeIf { key -> DownloadAddonCatalog.hasUsableAddon(key) }
-            ?.let { key -> DownloadAddonPreference.fromSaved(key) }
+        // The job has no tap to ask, so it follows the same preference a plain
+        // tap would: the saved addon if it still works, otherwise the first
+        // capable one. Leaving the setting blank still means "try an addon",
+        // not "save YouTube behind the user's back".
+        val defaultChoice = DownloadAddonPreference.automatic(
+            AppSettings.defaultDownloadAddonKey.value,
+            DownloadAddonCatalog.options().map { it.key },
+        )
         val handled = onDevice.mapTo(HashSet()) { it.videoId } +
             Downloads.downloadNow(context, fetch, record.title, defaultChoice)
 

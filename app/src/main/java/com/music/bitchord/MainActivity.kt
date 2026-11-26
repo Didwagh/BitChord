@@ -586,8 +586,12 @@ private class DownloadLauncher(
     /** A saved addon cannot outlive uninstall, disable, or a dropped capability. */
     private fun effectiveAddonChoice(explicit: DownloadAddonChoice?): DownloadAddonChoice? {
         if (explicit != null) return explicit
-        val saved = DownloadAddonPreference.fromSaved(AppSettings.defaultDownloadAddonKey.value) ?: return null
-        return saved.takeIf { DownloadAddonCatalog.hasUsableAddon(it.addonKey) }
+        // Filtered through the same capability check as the chooser, so an
+        // uninstalled or download-disabled addon is never pinned. With none
+        // saved, the first capable addon is the automatic choice: a plain tap
+        // must not skip straight to YouTube while Qobuz/Amazon are connected.
+        val available = DownloadAddonCatalog.options().map { it.key }
+        return DownloadAddonPreference.automatic(AppSettings.defaultDownloadAddonKey.value, available)
     }
 
     fun start(
@@ -600,7 +604,7 @@ private class DownloadLauncher(
         // An album page bills its artwork in the header: its rows carry no
         // cover, and a download written without one cannot adopt it later.
         val songs = requested
-            .filter { it.videoId !in saved }
+            .filter { DownloadAddonPreference.shouldAttempt(resolved, it.videoId, saved.keys) }
             .map { song ->
                 val cover = from?.thumbnailUrl
                 if (song.thumbnailUrl.isNullOrBlank() && !cover.isNullOrBlank()) {

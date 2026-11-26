@@ -114,6 +114,43 @@ class DownloadAddonTest {
     }
 
     @Test
+    fun `a plain tap prefers the first capable addon when none is saved`() {
+        val choice = DownloadAddonPreference.automatic(null, listOf("qobuz-web", "amazon-web"))
+        assertEquals(DownloadAddonChoice("qobuz-web", strict = false), choice)
+        assertFalse(choice!!.strict)
+    }
+
+    @Test
+    fun `a valid saved default wins over the automatic addon`() {
+        assertEquals(
+            DownloadAddonChoice("amazon-web", strict = false),
+            DownloadAddonPreference.automatic(" amazon-web ", listOf("qobuz-web", "amazon-web")),
+        )
+    }
+
+    @Test
+    fun `a stale saved default falls back to the first capable addon`() {
+        assertEquals(
+            DownloadAddonChoice("qobuz-web", strict = false),
+            DownloadAddonPreference.automatic("gone-web", listOf("qobuz-web", "amazon-web")),
+        )
+        assertNull(DownloadAddonPreference.automatic("gone-web", emptyList()))
+    }
+
+    @Test
+    fun `a strict addon choice can replace an earlier saved copy`() {
+        assertTrue(
+            DownloadAddonPreference.shouldAttempt(
+                DownloadAddonChoice("qobuz-web", strict = true),
+                "39fdxGmYfvg",
+                setOf("39fdxGmYfvg"),
+            ),
+        )
+        assertFalse(DownloadAddonPreference.shouldAttempt(null, "39fdxGmYfvg", setOf("39fdxGmYfvg")))
+        assertTrue(DownloadAddonPreference.shouldAttempt(null, "other", setOf("39fdxGmYfvg")))
+    }
+
+    @Test
     fun `a pinned lookup takes only the named Mornye addon`() {
         val youtube = FakeSource("yt", SourceKind.YOUTUBE)
         val otherAddon = morneye("amazon-web")
