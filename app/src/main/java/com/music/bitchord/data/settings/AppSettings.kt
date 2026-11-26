@@ -232,11 +232,12 @@ object AppSettings {
     /**
      * Stable Mornye addon key preferred for ordinary downloads.
      *
-     * Null is "Automatic": today's all-source resolution, including the cache
-     * first path for songs started from the Cached songs folder. A set key is
-     * tried first for taps and bulk downloads; if it cannot serve a track the
-     * ordinary resolver still answers. A long press is stronger than this and
-     * does not fall back — see [com.music.bitchord.download.DownloadAddonChoice].
+     * Null is "Automatic": the first download-capable addon is tried briefly,
+     * then the ordinary all-source resolver answers, including the cache-first
+     * path for songs started from the Cached songs folder. A set key is tried
+     * first for taps and bulk downloads with the same short budget. A long
+     * press is stronger than either: it does not fall back — see
+     * [com.music.bitchord.download.DownloadAddonChoice].
      *
      * Only the addon key is persisted. No session, grant or callback state.
      */

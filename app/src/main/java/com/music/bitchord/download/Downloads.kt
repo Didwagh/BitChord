@@ -1463,6 +1463,13 @@ object Downloads {
      * The same bounded, byte-probed path as [fromSources], narrowed to a single
      * source. No YouTube and no second addon is consulted here; what this
      * returns is what the listener asked for.
+     *
+     * A strict long press gets the full source budget because there is no
+     * fallback: waiting is better than quietly using another source. A saved
+     * or automatic preference gets only [PREFERRED_ADDON_LOOKUP_MS] — long
+     * enough for a warm addon search, short enough that an ordinary tap does
+     * not sit still for a minute and a half before the resolver is allowed to
+     * answer it.
      */
     private suspend fun fromChosenAddon(
         track: Song,
@@ -1471,7 +1478,9 @@ object Downloads {
     ): Kept? {
         val target = TrackMatcher.targetOf(track)
         val probes = java.util.concurrent.ConcurrentHashMap<String, Downloader.Probe>()
-        val stream = withTimeoutOrNull(SOURCE_LOOKUP_MS + LOOKUP_BACKSTOP_MS) {
+        val budgetMs = if (choice.strict) SOURCE_LOOKUP_MS else PREFERRED_ADDON_LOOKUP_MS
+        val backstopMs = if (choice.strict) LOOKUP_BACKSTOP_MS else PREFERRED_ADDON_BACKSTOP_MS
+        val stream = withTimeoutOrNull(budgetMs + backstopMs) {
             try {
                 SourceResolver.forDownloadFromAddon(
                     choice.addonKey,
@@ -1482,7 +1491,7 @@ object Downloads {
                             ?.also { probes[it.stream.url] = it.probe }
                             ?.stream
                     },
-                    budgetMs = SOURCE_LOOKUP_MS,
+                    budgetMs = budgetMs,
                     // Only a strict one-shot pick widens a capped download to
                     // Best. A saved default is still bound by Download quality.
                     widenCapped = choice.strict,
@@ -1725,6 +1734,16 @@ object Downloads {
 
     /** How far past [SOURCE_LOOKUP_MS] the outer backstop in [fromSources] waits. */
     private const val LOOKUP_BACKSTOP_MS = 15_000L
+
+    /**
+     * A saved or automatic addon preference is tried first, but must not hold
+     * an ordinary tap to the full source budget: this is long enough for a
+     * connected addon's warm search and short enough to fall through promptly.
+     */
+    private const val PREFERRED_ADDON_LOOKUP_MS = 8_000L
+
+    /** Backstop past [PREFERRED_ADDON_LOOKUP_MS] for a resolver that ignores cancellation. */
+    private const val PREFERRED_ADDON_BACKSTOP_MS = 2_000L
 
     /**
      * The extensions a file in Music can carry that say, on their own, that a
