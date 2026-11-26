@@ -1,7 +1,9 @@
 package com.music.bitchord.download
 
+import android.content.Context
 import com.music.bitchord.data.DebugLog as Log
 import com.music.bitchord.data.Http
+import com.music.bitchord.data.TrackLog
 import com.music.bitchord.data.innertube.PlayerClient
 import com.music.bitchord.data.innertube.StreamResolver
 import kotlinx.coroutines.CancellationException
@@ -14,8 +16,10 @@ import okhttp3.Callback
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.Request
 import okhttp3.Response
+import java.io.File
 import java.io.IOException
 import java.io.OutputStream
+import java.net.URI
 import kotlin.coroutines.coroutineContext
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
@@ -49,10 +53,56 @@ object Downloader {
 
     private const val TAG = "BitChord"
 
+    /** Tag for lines that have to survive a release build and reach an exported log. */
+    private const val DIAG_TAG = "BitChord/Download"
+
     /** Matches the range size read-ahead settled on; large enough to amortise, small enough to cancel promptly. */
     private const val CHUNK_BYTES = 2L * 1024 * 1024
 
     private const val BUFFER_BYTES = 64 * 1024
+
+    /**
+     * Directories a stream may name with `file://`. Mornye hands back a path
+     * inside the app's cache after an addon has fetched it; the player wraps
+     * OkHttp in a `DefaultDataSource` to read that path, but downloads used to
+     * hand it straight to OkHttp, which rejects the scheme and made every
+     * addon download fail before it wrote a byte.
+     *
+     * The allow-list matters: a configured source is code the listener chose,
+     * but its streams must not be able to turn a Download tap into a copy of an
+     * arbitrary private app file.
+     */
+    @Volatile
+    private var localRoots: List<File> = emptyList()
+
+    fun install(context: Context) {
+        val app = context.applicationContext
+        installRoots(listOf(app.cacheDir, app.filesDir))
+    }
+
+    internal fun installRoots(roots: List<File>) {
+        localRoots = roots.mapNotNull { runCatching { it.canonicalFile }.getOrNull() }.distinct()
+    }
+
+    /**
+     * Null for a network URL; an app-local file when the URL is one we are
+     * allowed to read. An out-of-scope `file://` path is a hard error rather
+     * than "no such source", so it can never quietly turn into a YouTube save.
+     */
+    private fun localFile(url: String): File? {
+        if (!url.startsWith("file:", ignoreCase = true)) return null
+        val uri = runCatching { URI(url) }.getOrNull()
+            ?.takeIf { it.scheme.equals("file", ignoreCase = true) && !it.path.isNullOrBlank() }
+            ?: throw IOException("Stream named an invalid local file")
+        val file = runCatching { File(uri).canonicalFile }.getOrNull()
+            ?: throw IOException("Stream named an invalid local file")
+        val roots = localRoots
+        if (roots.isEmpty() || roots.none { file.startsWith(it) }) {
+            throw IOException("Stream is outside the app's own files")
+        }
+        if (!file.isFile) throw IOException("Stream file is gone")
+        return file
+    }
 
     /**
      * Fetch all of [stream] into [sink].
@@ -175,6 +225,30 @@ object Downloader {
         sink: OutputStream,
         onProgress: (written: Long, total: Long) -> Unit,
     ): Long = withContext(Dispatchers.IO) {
+        val local = localFile(url)
+        if (local != null) {
+            val total = local.length().takeIf { it > 0 }
+            val buffer = ByteArray(BUFFER_BYTES)
+            var written = 0L
+            local.inputStream().use { source ->
+                while (true) {
+                    coroutineContext.ensureActive()
+                    val read = source.read(buffer)
+                    if (read == -1) break
+                    sink.write(buffer, 0, read)
+                    written += read
+                    if (total != null) onProgress(written, total)
+                }
+            }
+            sink.flush()
+            if (total != null && written < total) {
+                error("Local stream stopped at ${written}B of $total — try again")
+            }
+            if (written == 0L) error("Download failed: the local stream was empty")
+            TrackLog.i(DIAG_TAG, "copied ${written}B from an app-local stream")
+            return@withContext written
+        }
+
         val request = Request.Builder().url(url)
             .apply { headers.forEach { (name, value) -> header(name, value) } }
             .build()
@@ -265,6 +339,36 @@ object Downloader {
         headers: Map<String, String>,
         statedCodec: String? = null,
     ): Probe? = withContext(Dispatchers.IO) {
+        // An addon's finished file is already on this device. Probing it with
+        // OkHttp is what used to knock it out of the race with "unsupported
+        // scheme" and send the tap to the failure popup.
+        if (url.startsWith("file:", ignoreCase = true)) {
+            val local = runCatching { localFile(url) }
+                .onFailure {
+                    if (it is CancellationException) throw it
+                    Log.w(TAG, "could not use local stream file: ${it.message}")
+                }
+                .getOrNull()
+                ?: return@withContext null
+            return@withContext runCatching {
+                coroutineContext.ensureActive()
+                val head = local.inputStream().use { input ->
+                    val bytes = ByteArray(PROBE_BYTES)
+                    val read = input.read(bytes)
+                    if (read <= 0) ByteArray(0) else bytes.copyOf(read)
+                }
+                val found = sniff(head, "", statedCodec, local.length().takeIf { it > 0 })
+                TrackLog.i(
+                    DIAG_TAG,
+                    "probed an app-local stream: ${found?.javaClass?.simpleName ?: "unusable"}",
+                )
+                found
+            }.onFailure {
+                if (it is CancellationException) throw it
+                Log.w(TAG, "could not probe local stream file: ${it.message}")
+            }.getOrNull()
+        }
+
         runCatching {
             val request = Request.Builder().url(url)
                 .header("Range", "bytes=0-${PROBE_BYTES - 1}")

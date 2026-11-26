@@ -42,6 +42,7 @@ import com.music.bitchord.data.settings.SearchHistory
 import com.music.bitchord.data.sources.SourceRegistry
 import com.music.bitchord.data.stats.ArtistFacts
 import com.music.bitchord.data.stats.ListeningStats
+import com.music.bitchord.download.Downloader
 import com.music.bitchord.download.Downloads
 import com.music.bitchord.download.PlaylistSync
 import androidx.work.Configuration
@@ -181,6 +182,10 @@ class BitChordApplication : Application(), SingletonImageLoader.Factory, Configu
         // by [Song.toMediaItem], so it has to be open before the restart
         // snapshot below is turned back into queue items.
         OriginalVersion.init(this)
+        // Addon downloads finish in the app's own cache and arrive as file://
+        // streams. The downloader needs its allow-list before any queue can
+        // try to read one.
+        Downloader.install(this)
         // What's already saved to Downloads, so the song menu can say so
         // without a media-store query per row.
         Downloads.init(this)

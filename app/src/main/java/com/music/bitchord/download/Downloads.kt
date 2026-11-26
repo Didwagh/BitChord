@@ -7,6 +7,7 @@ import android.media.MediaMetadataRetriever
 import android.net.Uri
 import com.music.bitchord.data.DebugLog as Log
 import androidx.core.content.ContextCompat
+import com.music.bitchord.data.TrackLog
 import com.music.bitchord.data.innertube.StreamResolver
 import com.music.bitchord.data.model.Song
 import com.music.bitchord.data.settings.AppSettings
@@ -75,6 +76,7 @@ sealed interface DownloadState {
 object Downloads {
 
     private const val TAG = "BitChord"
+    private const val DIAG_TAG = "BitChord/Download"
     private const val KEY_SAVED_METADATA = "downloaded_tracks_metadata"
     private const val KEY_SAVED_COLLECTIONS = "downloaded_collections"
 
@@ -205,6 +207,12 @@ object Downloads {
             // connection that allowed it and is none of this check's business.
             val inFlight = _active.value[id]
             if (inFlight !is DownloadState.Queued && inFlight !is DownloadState.Running) {
+                TrackLog.w(
+                    DIAG_TAG,
+                    "refused '${song.title}': Wi-Fi-only downloads are on" +
+                        if (choice?.strict == true) " and a chosen addon cannot use cache" else "",
+                    id,
+                )
                 DownloadSession.queued(song, from, choice)
                 // A strict pick cannot quietly use the cache, so this is a
                 // failed addon ask like any other. The softer saved default
@@ -230,6 +238,14 @@ object Downloads {
         if (choice != null) addonChoiceFor[id] = choice else addonChoiceFor.remove(id)
         _active.update { it + (id to DownloadState.Queued) }
         DownloadSession.queued(song, from, choice)
+        TrackLog.i(
+            DIAG_TAG,
+            "queued '${song.title}'" + (choice?.let { c ->
+                " from ${DownloadAddonCatalog.displayName(c.addonKey)}" +
+                    if (c.strict) " (chosen)" else " (preferred)"
+            } ?: ""),
+            id,
+        )
 
         val app = context.applicationContext
         runCatching {
@@ -1060,6 +1076,7 @@ object Downloads {
             throw e
         } catch (e: Exception) {
             Log.w(TAG, "download failed for $id: ${e.message}", e)
+            TrackLog.e(DIAG_TAG, "download failed for '${song.title}': ${e.friendly()}", id)
             // A strict long press is a promise that no other source will be
             // used. When that attempt fails, say so in the app — never as a
             // system notification, and never with a raw provider payload. A
@@ -1207,6 +1224,7 @@ object Downloads {
         plan.alreadyAt?.let { uri ->
             remember(song, track, uri)
             DownloadSession.done(id)
+            TrackLog.i(DIAG_TAG, "adopted an existing file for '${song.title}'", id)
             clear(id)
             return
         }
@@ -1243,6 +1261,7 @@ object Downloads {
                     Log.d(TAG, "$name is already in Music; adopting it")
                     remember(song, track, alreadyThere)
                     DownloadSession.done(id)
+                    TrackLog.i(DIAG_TAG, "adopted '$name' already in Music", id)
                     clear(id)
                     return@coroutineScope
                 }
@@ -1277,6 +1296,11 @@ object Downloads {
                     }
                     remember(song, track, savedUri, route.downloadFormat)
                     DownloadSession.done(id)
+                    TrackLog.i(
+                        DIAG_TAG,
+                        "saved an offline ${if (manifest.dash) "DASH" else "HLS"} package for '$name'",
+                        id,
+                    )
                     clear(id)
                     Log.d(TAG, "saved offline ${if (manifest.dash) "DASH" else "HLS"} package for $name")
                     return@coroutineScope
@@ -1301,6 +1325,7 @@ object Downloads {
                 pending = null
                 remember(song, track, savedUri, route.downloadFormat, artworkUri)
                 DownloadSession.done(id)
+                TrackLog.i(DIAG_TAG, "published '$name' to Music/BitChord", id)
                 clear(id)
                 Log.d(TAG, "saved $name")
             }
@@ -1385,6 +1410,11 @@ object Downloads {
             }
             if (choice.strict) {
                 val name = DownloadAddonCatalog.displayName(choice.addonKey)
+                TrackLog.w(
+                    DIAG_TAG,
+                    "$name could not supply a keepable copy of '${track.title}'",
+                    track.videoId,
+                )
                 error("Couldn't download this song from $name — check that it's still connected")
             }
             // A saved default is a preference, not a cage: carry on to the row,
@@ -1666,6 +1696,7 @@ object Downloads {
         val probe = Downloader.probe(stream.url, stream.headers, stream.format.codec)
         if (probe == null) {
             Log.d(TAG, "${stream.format.summary}: not a file a download can keep; passing")
+            TrackLog.w(DIAG_TAG, "${stream.format.summary} could not be probed as a keepable file")
             return null
         }
         val export = AppSettings.exportDownloads.value

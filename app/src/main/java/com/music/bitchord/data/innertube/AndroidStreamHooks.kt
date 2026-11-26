@@ -12,6 +12,7 @@ import com.music.bitchord.data.innertube.potoken.PoTokenGenerator
 import com.music.bitchord.data.innertube.potoken.PoTokenWebView
 import com.music.bitchord.data.settings.AppSettings
 import com.music.bitchord.data.sources.SourceResolver
+import com.music.bitchord.data.sources.mornye.DownloadAddonCatalog
 
 /**
  * The phone's answers to what the shared stream resolution asks of its
@@ -40,9 +41,21 @@ object AndroidStreamHooks {
                 "request=${SourceResolver.requestForNow()}"
         }
         TrackLog.headerLines = {
+            // A Download tap refused by Wi-Fi-only used to leave no trace at
+            // all in an exported log. These are settings and connectivity
+            // facts, never tokens or URLs, and they separate "the button was
+            // blocked" from "the source failed".
+            val defaultAddon = AppSettings.defaultDownloadAddonKey.value
+                ?.let(DownloadAddonCatalog::displayName)
+                ?: "automatic"
             listOf(
                 "build: ${BuildConfig.VERSION_NAME} (${BuildConfig.BUILD_TYPE})",
                 "device: ${Build.MANUFACTURER} ${Build.MODEL}, Android ${Build.VERSION.RELEASE}",
+                "downloads: allowed=${AppSettings.downloadsAllowedNow} " +
+                    "wifiOnly=${AppSettings.wifiOnlyDownloads.value} " +
+                    "metered=${AppSettings.meteredConnection.value} " +
+                    "exportToMusic=${AppSettings.exportDownloads.value} " +
+                    "defaultAddon=$defaultAddon",
             )
         }
         StreamResolver.maxKbps = { AppSettings.effectiveAudioQuality.maxKbps }

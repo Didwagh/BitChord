@@ -36,11 +36,12 @@ import kotlin.coroutines.CoroutineContext
  *
  * ### What gets kept
  *
- * Only the paths that decide how a track plays: the resolver, the module
- * sandbox, the source ladder, the cache and the player. Deliberately not the
- * feeds, the artwork, the lyrics or the library — a paste that includes
- * everything is one nobody reads to the end of, and none of it has ever been
- * the answer to "why did this song sound wrong".
+ * Only the paths that decide how a track plays, or why a Download tap did not
+ * produce a file: the resolver, the module sandbox, the source ladder, the
+ * cache, the player and the download queue. Deliberately not the feeds, the
+ * artwork, the lyrics or the library — a paste that includes everything is one
+ * nobody reads to the end of, and none of it has ever been the answer to
+ * "why did this song sound wrong" or "why did Download do nothing".
  *
  * ### Which lines are whose
  *
