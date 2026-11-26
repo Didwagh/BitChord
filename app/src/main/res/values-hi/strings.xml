@@ -145,6 +145,16 @@
     <string name="widget_pill_description">ट्रैक के साथ लाइक, शफ़ल और प्लेबैक नियंत्रण, एक ही पंक्ति में।</string>
     <string name="widget_preview_pill">गाने का शीर्षक - कलाकार</string>
     <string name="download_quality">डाउनलोड क्वालिटी</string>
+    <string name="download_addon_default">डिफ़ॉल्ट डाउनलोड एडऑन</string>
+    <string name="download_addon_default_subtitle">साधारण टैप, सभी डाउनलोड करें और स्वतः डाउनलोड के लिए उपयोग किया जाता है</string>
+    <string name="download_addon_automatic">स्वतः</string>
+    <string name="download_addon_chooser_title">एडऑन से डाउनलोड करें</string>
+    <string name="download_addon_chooser_message">केवल इस बार। इसे खोलने के लिए डाउनलोड, सभी डाउनलोड करें या कैश्ड गाने के बटन को दबाकर रखें।</string>
+    <string name="download_addon_failed_title">%1$s से डाउनलोड नहीं हो सका</string>
+    <string name="download_addon_failed_body">%1$s “%2$s” प्रदान नहीं कर सका। किसी अन्य स्रोत से कुछ भी सहेजा नहीं गया। जाँचें कि एडऑन जुड़ा है, फिर पुनः प्रयास करें।</string>
+    <string name="download_addon_failed_cached">इस कैश्ड गानों के डाउनलोड के लिए %1$s “%2$s” प्रदान नहीं कर सका। जाँचें कि एडऑन जुड़ा है, फिर पुनः प्रयास करें।</string>
+    <string name="download_addon_none_title">कोई डाउनलोड एडऑन नहीं</string>
+    <string name="download_addon_none_body">कोई सक्रिय Mornye एक्सटेंशन गाने डाउनलोड नहीं कर सकता। जोड़ने या सक्रिय करने के लिए स्रोत → Mornye एक्सटेंशन खोलें।</string>
     <string name="download_wifi_only">केवल Wi-Fi पर डाउनलोड करें</string>
     <string name="spatial_audio">स्पेशियल ऑडियो</string>
     <string name="spatial_audio_subtitle">ज़्यादा इमर्सिव अनुभव के लिए स्टीरियो ट्रैक को चौड़ा करता है</string>

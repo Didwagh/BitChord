@@ -145,6 +145,16 @@
     <string name="widget_pill_description">Titel mit „Gefällt mir“, Zufallswiedergabe und Wiedergabesteuerung in einer Zeile.</string>
     <string name="widget_preview_pill">Songtitel - Künstler</string>
     <string name="download_quality">Download-Qualität</string>
+    <string name="download_addon_default">Standard-Download-Addon</string>
+    <string name="download_addon_default_subtitle">Wird bei normalem Tippen, „Alle herunterladen“ und automatischen Downloads verwendet</string>
+    <string name="download_addon_automatic">Automatisch</string>
+    <string name="download_addon_chooser_title">Aus Addon herunterladen</string>
+    <string name="download_addon_chooser_message">Nur diesmal. Halte „Herunterladen“, „Alle herunterladen“ oder die Taste eines zwischengespeicherten Titels gedrückt, um dies zu öffnen.</string>
+    <string name="download_addon_failed_title">Download aus %1$s nicht möglich</string>
+    <string name="download_addon_failed_body">%1$s konnte „%2$s“ nicht bereitstellen. Es wurde nichts aus einer anderen Quelle gespeichert. Prüfe, ob das Addon verbunden ist, und versuche es erneut.</string>
+    <string name="download_addon_failed_cached">%1$s konnte „%2$s“ für diesen Download aus zwischengespeicherten Titeln nicht bereitstellen. Prüfe, ob das Addon verbunden ist, und versuche es erneut.</string>
+    <string name="download_addon_none_title">Keine Download-Addons</string>
+    <string name="download_addon_none_body">Kein aktiviertes Mornye-Addon kann Titel herunterladen. Öffne Quellen → Mornye-Erweiterungen, um eines hinzuzufügen oder zu aktivieren.</string>
     <string name="download_wifi_only">Nur über WLAN herunterladen</string>
     <string name="spatial_audio">Räumliches Audio</string>
     <string name="spatial_audio_subtitle">Verbreitert Stereo-Tracks für ein intensiveres Klangerlebnis</string>

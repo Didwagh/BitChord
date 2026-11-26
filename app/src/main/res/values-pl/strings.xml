@@ -148,6 +148,16 @@
     <string name="widget_pill_description">Utwór z polubieniem, losowaniem i kontrolkami odtwarzania w jednym wierszu.</string>
     <string name="widget_preview_pill">Tytuł utworu - Artysta</string>
     <string name="download_quality">Jakość pobierania</string>
+    <string name="download_addon_default">Domyślny dodatek pobierania</string>
+    <string name="download_addon_default_subtitle">Używany przy zwykłym dotknięciu, Pobierz wszystko i automatycznym pobieraniu</string>
+    <string name="download_addon_automatic">Automatycznie</string>
+    <string name="download_addon_chooser_title">Pobierz z dodatku</string>
+    <string name="download_addon_chooser_message">Tylko ten raz. Przytrzymaj Pobierz, Pobierz wszystko lub przycisk utworu w pamięci podręcznej, aby to otworzyć.</string>
+    <string name="download_addon_failed_title">Nie udało się pobrać z %1$s</string>
+    <string name="download_addon_failed_body">%1$s nie mógł udostępnić „%2$s”. Nic nie zostało zapisane z innego źródła. Sprawdź, czy dodatek jest połączony, i spróbuj ponownie.</string>
+    <string name="download_addon_failed_cached">%1$s nie mógł udostępnić „%2$s” dla tego pobierania z pamięci podręcznej. Sprawdź, czy dodatek jest połączony, i spróbuj ponownie.</string>
+    <string name="download_addon_none_title">Brak dodatków pobierania</string>
+    <string name="download_addon_none_body">Żaden włączony dodatek Mornye nie może pobierać utworów. Otwórz Źródła → Rozszerzenia Mornye, aby dodać lub włączyć dodatek.</string>
     <string name="download_wifi_only">Pobieraj tylko przez Wi-Fi</string>
     <string name="spatial_audio">Dźwięk przestrzenny</string>
     <string name="spatial_audio_subtitle">Większa immersja dzięki poszerzeniu utworów stereo</string>

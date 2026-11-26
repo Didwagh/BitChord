@@ -146,6 +146,16 @@
     <string name="widget_pill_description">Le titre avec J\'aime, lecture aléatoire et commandes de lecture, sur une seule ligne.</string>
     <string name="widget_preview_pill">Titre de la chanson - Artiste</string>
     <string name="download_quality">Qualité de téléchargement</string>
+    <string name="download_addon_default">Extension de téléchargement par défaut</string>
+    <string name="download_addon_default_subtitle">Utilisée pour un appui normal, Tout télécharger et les téléchargements automatiques</string>
+    <string name="download_addon_automatic">Automatique</string>
+    <string name="download_addon_chooser_title">Télécharger depuis une extension</string>
+    <string name="download_addon_chooser_message">Une seule fois. Maintenez Télécharger, Tout télécharger ou le bouton d’un morceau en cache pour ouvrir ceci.</string>
+    <string name="download_addon_failed_title">Impossible de télécharger depuis %1$s</string>
+    <string name="download_addon_failed_body">%1$s n’a pas pu fournir « %2$s ». Rien n’a été enregistré depuis une autre source. Vérifiez que l’extension est connectée, puis réessayez.</string>
+    <string name="download_addon_failed_cached">%1$s n’a pas pu fournir « %2$s » pour ce téléchargement depuis les morceaux en cache. Vérifiez que l’extension est connectée, puis réessayez.</string>
+    <string name="download_addon_none_title">Aucune extension de téléchargement</string>
+    <string name="download_addon_none_body">Aucune extension Mornye activée ne peut télécharger de morceaux. Ouvrez Sources → Extensions Mornye pour en ajouter ou en activer une.</string>
     <string name="download_wifi_only">Télécharger uniquement en Wi-Fi</string>
     <string name="spatial_audio">Audio spatial</string>
     <string name="spatial_audio_subtitle">Élargit les pistes stéréo pour une expérience plus immersive</string>

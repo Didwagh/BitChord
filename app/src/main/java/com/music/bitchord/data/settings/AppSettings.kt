@@ -230,6 +230,19 @@ object AppSettings {
     val downloadQuality = MutableStateFlow(DownloadQuality.LOSSLESS)
 
     /**
+     * Stable Mornye addon key preferred for ordinary downloads.
+     *
+     * Null is "Automatic": today's all-source resolution, including the cache
+     * first path for songs started from the Cached songs folder. A set key is
+     * tried first for taps and bulk downloads; if it cannot serve a track the
+     * ordinary resolver still answers. A long press is stronger than this and
+     * does not fall back — see [com.music.bitchord.download.DownloadAddonChoice].
+     *
+     * Only the addon key is persisted. No session, grant or callback state.
+     */
+    val defaultDownloadAddonKey = MutableStateFlow<String?>(null)
+
+    /**
      * Refuse to start a download while the connection charges for data.
      *
      * Metered rather than literally-Wi-Fi, the same test [effectiveAudioQuality]
@@ -1054,6 +1067,7 @@ object AppSettings {
         ).coerceIn(MIN_UPGRADE_LENGTH_SLACK_SECONDS, MAX_UPGRADE_LENGTH_SLACK_SECONDS)
         migrateDownloadQuality()
         downloadQuality.value = readDownloadQuality()
+        defaultDownloadAddonKey.value = prefs.getString(KEY_DEFAULT_DOWNLOAD_ADDON, null)?.takeIf { it.isNotBlank() }
         wifiOnlyDownloads.value = prefs.getBoolean(KEY_WIFI_ONLY_DOWNLOADS, true)
         exportDownloads.value = prefs.getBoolean(KEY_EXPORT_DOWNLOADS, true)
         syncDownloadedPlaylists.value = prefs.getBoolean(KEY_SYNC_DOWNLOADED_PLAYLISTS, false)
@@ -1392,6 +1406,17 @@ object AppSettings {
     fun setDownloadQuality(value: DownloadQuality) {
         downloadQuality.value = value
         prefs.edit().putString(KEY_QUALITY_DOWNLOAD, value.name).apply()
+    }
+
+    /** Null clears the preference and returns downloads to Automatic. */
+    fun setDefaultDownloadAddonKey(addonKey: String?) {
+        val normalized = addonKey?.trim()?.takeIf { it.isNotBlank() }
+        defaultDownloadAddonKey.value = normalized
+        prefs.edit().let { editor ->
+            if (normalized == null) editor.remove(KEY_DEFAULT_DOWNLOAD_ADDON)
+            else editor.putString(KEY_DEFAULT_DOWNLOAD_ADDON, normalized)
+            editor.apply()
+        }
     }
 
     fun setWifiOnlyDownloads(value: Boolean) {
@@ -2436,6 +2461,7 @@ object AppSettings {
     private const val KEY_QUALITY_CELLULAR = "audio_quality_cellular"
     private const val KEY_UPGRADE_LENGTH_SLACK_SECONDS = "upgrade_length_slack_seconds"
     private const val KEY_QUALITY_DOWNLOAD = "audio_quality_download"
+    private const val KEY_DEFAULT_DOWNLOAD_ADDON = "default_download_addon"
     private const val KEY_WIFI_ONLY_DOWNLOADS = "wifi_only_downloads"
     private const val KEY_EXPORT_DOWNLOADS = "export_downloads"
     /** One-shot migration: make shared-storage saves the default on old installs too. */

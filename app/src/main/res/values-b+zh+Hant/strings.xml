@@ -140,6 +140,16 @@
     <string name="widget_pill_description">單行顯示曲目，以及喜歡、隨機播放和播放控制元件。</string>
     <string name="widget_preview_pill">歌曲標題 - 藝人</string>
     <string name="download_quality">下載質量</string>
+    <string name="download_addon_default">預設下載外掛</string>
+    <string name="download_addon_default_subtitle">用於一般點按、「全部下載」與自動下載</string>
+    <string name="download_addon_automatic">自動</string>
+    <string name="download_addon_chooser_title">從外掛下載</string>
+    <string name="download_addon_chooser_message">僅此一次。長按「下載」「全部下載」或已快取歌曲的按鈕即可開啟此選單。</string>
+    <string name="download_addon_failed_title">無法從 %1$s 下載</string>
+    <string name="download_addon_failed_body">%1$s 無法提供「%2$s」。未從其他來源儲存任何內容。請檢查外掛是否已連線，然後重試。</string>
+    <string name="download_addon_failed_cached">%1$s 無法為此次快取歌曲下載提供「%2$s」。請檢查外掛是否已連線，然後重試。</string>
+    <string name="download_addon_none_title">沒有下載外掛</string>
+    <string name="download_addon_none_body">沒有已啟用的 Mornye 擴充功能可以下載歌曲。開啟「來源」→「Mornye 擴充功能」以新增或啟用。</string>
     <string name="download_wifi_only">僅透過 Wi-Fi 下載</string>
     <string name="spatial_audio">空間音訊</string>
     <string name="spatial_audio_subtitle">拓寬立體聲音軌，帶來更沉浸的體驗</string>

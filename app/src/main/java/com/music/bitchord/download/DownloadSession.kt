@@ -66,6 +66,8 @@ object DownloadSession {
         val progress: DownloadProgress,
         /** What release this was part of, when it was part of one. */
         val from: String? = null,
+        /** A chosen addon survives a retry from the download manager. */
+        val addonChoice: DownloadAddonChoice? = null,
         /** Ask order, so the list reads the way the queue drains. */
         val sequence: Long,
     )
@@ -141,7 +143,7 @@ object DownloadSession {
      * and two rows for one song would leave the failure on screen next to its
      * own retry.
      */
-    fun queued(song: Song, from: String? = null) {
+    fun queued(song: Song, from: String? = null, addonChoice: DownloadAddonChoice? = null) {
         update { state ->
             val existing = state.items.indexOfFirst { it.videoId == song.videoId }
             val item = Item(
@@ -149,6 +151,10 @@ object DownloadSession {
                 song = song,
                 progress = DownloadProgress.Queued,
                 from = from ?: state.items.getOrNull(existing)?.from,
+                // The manager's retry passes the row's own choice back. A
+                // fresh, ordinary request must not inherit an old strict pick
+                // from a failed row it happens to share an id with.
+                addonChoice = addonChoice,
                 sequence = if (existing >= 0) state.items[existing].sequence else tick(),
             )
             val items = if (existing >= 0) {

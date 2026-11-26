@@ -146,6 +146,16 @@
     <string name="widget_pill_description">La pista con Me gusta, orden aleatorio y controles de reproducción en una sola fila.</string>
     <string name="widget_preview_pill">Título de la canción - Artista</string>
     <string name="download_quality">Calidad de descarga</string>
+    <string name="download_addon_default">Complemento de descarga predeterminado</string>
+    <string name="download_addon_default_subtitle">Se usa al tocar, en Descargar todo y en las descargas automáticas</string>
+    <string name="download_addon_automatic">Automático</string>
+    <string name="download_addon_chooser_title">Descargar desde un complemento</string>
+    <string name="download_addon_chooser_message">Solo esta vez. Mantén pulsado Descargar, Descargar todo o el botón de una canción en caché para abrir esto.</string>
+    <string name="download_addon_failed_title">No se pudo descargar desde %1$s</string>
+    <string name="download_addon_failed_body">%1$s no pudo obtener «%2$s». No se guardó nada de otra fuente. Comprueba que el complemento esté conectado y vuelve a intentarlo.</string>
+    <string name="download_addon_failed_cached">%1$s no pudo obtener «%2$s» para esta descarga desde canciones en caché. Comprueba que el complemento esté conectado y vuelve a intentarlo.</string>
+    <string name="download_addon_none_title">No hay complementos de descarga</string>
+    <string name="download_addon_none_body">Ninguna extensión de Mornye habilitada puede descargar canciones. Abre Fuentes → Extensiones Mornye para añadir o habilitar una.</string>
     <string name="download_wifi_only">Descargar solo mediante Wi-Fi</string>
     <string name="spatial_audio">Audio espacial</string>
     <string name="spatial_audio_subtitle">Amplía las pistas estéreo para una experiencia más inmersiva</string>

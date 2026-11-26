@@ -154,6 +154,16 @@
     <string name="widget_pill_description">Beğen, karışık çalma ve çalma kontrolleriyle parça, tek satırda.</string>
     <string name="widget_preview_pill">Şarkı adı - Sanatçı</string>
     <string name="download_quality">İndirme kalitesi</string>
+    <string name="download_addon_default">Varsayılan indirme eklentisi</string>
+    <string name="download_addon_default_subtitle">Normal dokunuş, Tümünü indir ve otomatik indirmeler için kullanılır</string>
+    <string name="download_addon_automatic">Otomatik</string>
+    <string name="download_addon_chooser_title">Eklentiden indir</string>
+    <string name="download_addon_chooser_message">Yalnızca bu kez. Bunu açmak için İndir, Tümünü indir veya önbellekteki bir şarkının düğmesine basılı tutun.</string>
+    <string name="download_addon_failed_title">%1$s kaynağından indirilemedi</string>
+    <string name="download_addon_failed_body">%1$s “%2$s” şarkısını sağlayamadı. Başka bir kaynaktan hiçbir şey kaydedilmedi. Eklentinin bağlı olduğunu kontrol edip tekrar deneyin.</string>
+    <string name="download_addon_failed_cached">%1$s, bu önbellek şarkıları indirmesi için “%2$s” şarkısını sağlayamadı. Eklentinin bağlı olduğunu kontrol edip tekrar deneyin.</string>
+    <string name="download_addon_none_title">İndirme eklentisi yok</string>
+    <string name="download_addon_none_body">Etkin hiçbir Mornye uzantısı şarkı indiremez. Eklemek veya etkinleştirmek için Kaynaklar → Mornye Uzantıları’nı açın.</string>
     <string name="download_wifi_only">Yalnızca Wi-Fi üzerinden indir</string>
     <string name="convert_to_audio">Sese dönüştür</string>
     <string name="convert_to_video">Videoya dönüştür</string>

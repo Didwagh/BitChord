@@ -14,9 +14,11 @@ import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
@@ -318,11 +320,13 @@ fun RowScope.IosMenuQuickAction(
  * Pressing paints a rounded fill under the row rather than a ripple, the way
  * the panel's own platform does it.
  */
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun IosMenuRow(
     label: String,
     icon: ImageVector?,
     onClick: (() -> Unit)?,
+    onLongClick: (() -> Unit)? = null,
     modifier: Modifier = Modifier,
     description: String? = null,
     value: String? = null,
@@ -344,7 +348,15 @@ fun IosMenuRow(
             .clip(RoundedCornerShape(14.dp))
             .background(if (pressed) colors.pressed else Color.Transparent)
             .then(
-                if (onClick != null) {
+                if (onClick != null && onLongClick != null) {
+                    Modifier.combinedClickable(
+                        interactionSource = interaction,
+                        indication = null,
+                        enabled = enabled,
+                        onClick = onClick,
+                        onLongClick = onLongClick,
+                    )
+                } else if (onClick != null) {
                     Modifier.clickable(
                         interactionSource = interaction,
                         indication = null,

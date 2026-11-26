@@ -287,7 +287,7 @@ fun DownloadManagerPage(
             DownloadManagerRow(
                 item = item,
                 onCancel = { Downloads.cancel(item.videoId) },
-                onRetry = { Downloads.enqueue(context, item.song, item.from) },
+                onRetry = { Downloads.enqueue(context, item.song, item.from, item.addonChoice) },
             )
         }
     }

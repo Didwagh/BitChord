@@ -13,6 +13,7 @@ import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.snapping.rememberSnapFlingBehavior
 import com.music.bitchord.ui.components.liquidGlassRim
 import com.music.bitchord.ui.components.continuous
@@ -606,6 +607,9 @@ fun DetailScreen(
                         onArtistClick = onArtistClick.takeIf { folder == null },
                         onToggleLibrary = onToggleLibrary,
                         onDownloadAll = folder?.onDownload?.let { download -> { download(songs) } },
+                        onDownloadAllAddonChoice = folder?.onDownloadAddonChoice?.let { choose ->
+                            { choose(songs) }
+                        },
                     )
                 }
             }
@@ -936,6 +940,8 @@ private fun ReleaseHeader(
     onToggleLibrary: (() -> Unit)?,
     /** The Cached songs folder's: saves every track on it to Downloads. Null hides it. */
     onDownloadAll: (() -> Unit)? = null,
+    /** Long press on that button: choose a Mornye addon for the whole batch. */
+    onDownloadAllAddonChoice: (() -> Unit)? = null,
 ) {
     val (credit, meta) = page.headerLines(songs.size, songs.playtime())
     // Every row on a release carries the same credit — see [pageCredit] — so
@@ -1142,6 +1148,7 @@ private fun ReleaseHeader(
                             icon = Icons.Rounded.Download,
                             contentDescription = stringResource(R.string.download_all),
                             onClick = it,
+                            onLongClick = onDownloadAllAddonChoice,
                             size = RELEASE_SIDE_BUTTON,
                         )
                     }
@@ -1781,11 +1788,13 @@ private fun PlayCircle(
  * Play, on both the release and the artist page. A light veil with a hairline
  * edge, Apple's look for these, rather than the dark glass.
  */
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun CircleIconButton(
     icon: ImageVector,
     contentDescription: String,
     onClick: () -> Unit,
+    onLongClick: (() -> Unit)? = null,
     haptic: Haptic = Haptic.Tap,
     size: Dp = 50.dp,
     /**
@@ -1806,10 +1815,14 @@ private fun CircleIconButton(
             // only: over the page's flat tint a blurred fill would look the same.
             .liquidGlassRim(CircleShape)
             .border(1.dp, Color.White.copy(alpha = TOP_RELEASE_EDGE_ALPHA), CircleShape)
-            .clickable(enabled = enabled) {
-                haptics.play(haptic)
-                onClick()
-            },
+            .combinedClickable(
+                enabled = enabled,
+                onClick = {
+                    haptics.play(haptic)
+                    onClick()
+                },
+                onLongClick = onLongClick,
+            ),
         contentAlignment = Alignment.Center,
     ) {
         Icon(

@@ -792,8 +792,45 @@ fun <T> ChoiceAlert(
     detail: (T) -> String? = { null },
     onSelect: (T) -> Unit,
     onDismiss: () -> Unit,
+    /**
+     * Open above other windows. A chooser started from the track menu would
+     * otherwise be painted behind that menu — see [InfoAlert.inOwnWindow].
+     */
+    inOwnWindow: Boolean = false,
 ) {
-    AlertScaffold(hazeState = hazeState, onDismiss = onDismiss) {
+    if (inOwnWindow) {
+        Dialog(
+            onDismissRequest = onDismiss,
+            properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false),
+        ) {
+            val window = (LocalView.current.parent as? DialogWindowProvider)?.window
+            SideEffect { window?.setDimAmount(0f) }
+            ChoiceAlertFrame(
+                hazeState, title, message, options, selected, label, detail, onSelect, onDismiss, frosted = false,
+            )
+        }
+    } else {
+        ChoiceAlertFrame(
+            hazeState, title, message, options, selected, label, detail, onSelect, onDismiss, frosted = true,
+        )
+    }
+}
+
+@OptIn(ExperimentalHazeMaterialsApi::class)
+@Composable
+private fun <T> ChoiceAlertFrame(
+    hazeState: HazeState,
+    title: String,
+    message: String?,
+    options: List<T>,
+    selected: T,
+    label: (T) -> String,
+    detail: (T) -> String?,
+    onSelect: (T) -> Unit,
+    onDismiss: () -> Unit,
+    frosted: Boolean,
+) {
+    AlertScaffold(hazeState = hazeState, onDismiss = onDismiss, frosted = frosted) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()

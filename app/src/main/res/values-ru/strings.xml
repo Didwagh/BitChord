@@ -155,6 +155,16 @@
     <string name="widget_pill_description">Трек с лайком, перемешиванием и управлением воспроизведением в одну строку.</string>
     <string name="widget_preview_pill">Название песни - Исполнитель</string>
     <string name="download_quality">Качество загрузки</string>
+    <string name="download_addon_default">Дополнение для загрузки по умолчанию</string>
+    <string name="download_addon_default_subtitle">Используется при обычном нажатии, «Загрузить всё» и автоматических загрузках</string>
+    <string name="download_addon_automatic">Автоматически</string>
+    <string name="download_addon_chooser_title">Загрузить из дополнения</string>
+    <string name="download_addon_chooser_message">Только для этого раза. Удерживайте «Загрузить», «Загрузить всё» или кнопку кэшированной песни, чтобы открыть это окно.</string>
+    <string name="download_addon_failed_title">Не удалось загрузить из %1$s</string>
+    <string name="download_addon_failed_body">%1$s не смог предоставить «%2$s». Ничего не сохранено из других источников. Проверьте подключение дополнения и повторите попытку.</string>
+    <string name="download_addon_failed_cached">%1$s не смог предоставить «%2$s» для загрузки из кэшированных песен. Проверьте подключение дополнения и повторите попытку.</string>
+    <string name="download_addon_none_title">Нет дополнений для загрузки</string>
+    <string name="download_addon_none_body">Ни одно включённое расширение Mornye не может загружать песни. Откройте «Источники» → «Расширения Mornye», чтобы добавить или включить его.</string>
     <string name="download_wifi_only">Загружать только по Wi-Fi</string>
     <string name="spatial_audio">Пространственный звук</string>
     <string name="spatial_audio_subtitle">Расширяет стереодорожки для более глубокого погружения</string>

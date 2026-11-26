@@ -148,6 +148,16 @@
     <string name="widget_pill_description">เพลงพร้อมปุ่มถูกใจ สุ่มเล่น และปุ่มควบคุมการเล่นในแถวเดียว</string>
     <string name="widget_preview_pill">ชื่อเพลง - ศิลปิน</string>
     <string name="download_quality">คุณภาพการดาวน์โหลด</string>
+    <string name="download_addon_default">ปลั๊กอินการดาวน์โหลดเริ่มต้น</string>
+    <string name="download_addon_default_subtitle">ใช้สำหรับการแตะปกติ ดาวน์โหลดทั้งหมด และการดาวน์โหลดอัตโนมัติ</string>
+    <string name="download_addon_automatic">อัตโนมัติ</string>
+    <string name="download_addon_chooser_title">ดาวน์โหลดจากปลั๊กอิน</string>
+    <string name="download_addon_chooser_message">ครั้งเดียวนี้เท่านั้น กดค้างที่ ดาวน์โหลด, ดาวน์โหลดทั้งหมด หรือปุ่มของเพลงที่แคชไว้เพื่อเปิดเมนูนี้</string>
+    <string name="download_addon_failed_title">ไม่สามารถดาวน์โหลดจาก %1$s ได้</string>
+    <string name="download_addon_failed_body">%1$s ไม่สามารถให้ “%2$s” ได้ ไม่มีการบันทึกจากแหล่งอื่น ตรวจสอบว่าปลั๊กอินเชื่อมต่ออยู่แล้วลองอีกครั้ง</string>
+    <string name="download_addon_failed_cached">%1$s ไม่สามารถให้ “%2$s” สำหรับการดาวน์โหลดเพลงที่แคชไว้นี้ได้ ตรวจสอบว่าปลั๊กอินเชื่อมต่ออยู่แล้วลองอีกครั้ง</string>
+    <string name="download_addon_none_title">ไม่มีปลั๊กอินดาวน์โหลด</string>
+    <string name="download_addon_none_body">ไม่มีส่วนขยาย Mornye ที่เปิดใช้งานซึ่งดาวน์โหลดเพลงได้ เปิด แหล่งที่มา → ส่วนขยาย Mornye เพื่อเพิ่มหรือเปิดใช้งาน</string>
     <string name="download_wifi_only">ดาวน์โหลดผ่าน Wi-Fi เท่านั้น</string>
     <string name="convert_to_audio">แปลงเป็นเสียง</string>
     <string name="convert_to_video">แปลงเป็นวิดีโอ</string>

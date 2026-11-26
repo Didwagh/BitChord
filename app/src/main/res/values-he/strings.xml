@@ -147,6 +147,16 @@
     <string name="widget_pill_description">הרצועה עם לייק, ערבוב ופקדי הפעלה, בשורה אחת.</string>
     <string name="widget_preview_pill">שם השיר - אמן</string>
     <string name="download_quality">איכות הורדה</string>
+    <string name="download_addon_default">תוסף הורדה ברירת מחדל</string>
+    <string name="download_addon_default_subtitle">משמש ללחיצה רגילה, להורדת הכול ולהורדות אוטומטיות</string>
+    <string name="download_addon_automatic">אוטומטי</string>
+    <string name="download_addon_chooser_title">הורדה מתוסף</string>
+    <string name="download_addon_chooser_message">פעם אחת בלבד. החזיקו „הורדה“, „הורד הכול“ או את הכפתור של שיר במטמון כדי לפתוח את זה.</string>
+    <string name="download_addon_failed_title">לא ניתן להוריד מ־%1$s</string>
+    <string name="download_addon_failed_body">%1$s לא הצליח לספק את „%2$s“. דבר לא נשמר ממקור אחר. בדקו שהתוסף מחובר ונסו שוב.</string>
+    <string name="download_addon_failed_cached">%1$s לא הצליח לספק את „%2$s“ עבור ההורדה הזו משירים במטמון. בדקו שהתוסף מחובר ונסו שוב.</string>
+    <string name="download_addon_none_title">אין תוספי הורדה</string>
+    <string name="download_addon_none_body">אף הרחבת Mornye מופעלת אינה יכולה להוריד שירים. פתחו „מקורות“ → „הרחבות Mornye“ כדי להוסיף או להפעיל אחת.</string>
     <string name="download_wifi_only">הורדה ב-Wi-Fi בלבד</string>
     <string name="spatial_audio">אודיו מרחבי</string>
     <string name="spatial_audio_subtitle">מרחיב רצועות סטריאו לתחושה סוחפת יותר</string>

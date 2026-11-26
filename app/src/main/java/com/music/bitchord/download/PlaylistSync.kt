@@ -29,6 +29,7 @@ import com.music.bitchord.R
 import com.music.bitchord.data.DebugLog as Log
 import com.music.bitchord.data.LikeState
 import com.music.bitchord.data.YtMusicRepository
+import com.music.bitchord.data.sources.mornye.DownloadAddonCatalog
 import com.music.bitchord.data.model.LikeStatus
 import com.music.bitchord.data.model.Song
 import com.music.bitchord.data.settings.AppSettings
@@ -335,7 +336,12 @@ object PlaylistSync {
         val fetch = missing.map { song ->
             if (song.thumbnailUrl.isNullOrBlank() && cover != null) song.copy(thumbnailUrl = cover) else song
         }
-        val handled = onDevice.mapTo(HashSet()) { it.videoId } + Downloads.downloadNow(context, fetch, record.title)
+        val savedAddon = AppSettings.defaultDownloadAddonKey.value?.trim()?.takeIf { it.isNotEmpty() }
+        val defaultChoice = savedAddon
+            ?.takeIf { key -> DownloadAddonCatalog.hasUsableAddon(key) }
+            ?.let { key -> DownloadAddonPreference.fromSaved(key) }
+        val handled = onDevice.mapTo(HashSet()) { it.videoId } +
+            Downloads.downloadNow(context, fetch, record.title, defaultChoice)
 
         // Read again: the listener may have deleted this download meanwhile, and
         // writing the record back would bring it back from the dead.

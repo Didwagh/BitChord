@@ -168,6 +168,8 @@ import com.music.bitchord.data.settings.AutomixPerformanceMode
 import com.music.bitchord.playback.smart.AutomixModels
 import com.music.bitchord.R
 import com.music.bitchord.data.sources.DeviceCodecs
+import com.music.bitchord.data.sources.mornye.DownloadAddonCatalog
+import com.music.bitchord.data.sources.mornye.MorneyePackageManager
 import com.music.bitchord.data.settings.AudioQuality
 import com.music.bitchord.data.settings.DownloadQuality
 import com.music.bitchord.data.settings.ThemeMode
@@ -291,6 +293,7 @@ fun SettingsScreen(
     val cacheLimitBytes by AppSettings.audioCacheLimitBytes.collectAsStateWithLifecycle()
     val showCacheFolder by AppSettings.showCacheFolder.collectAsStateWithLifecycle()
     val downloadQuality by AppSettings.downloadQuality.collectAsStateWithLifecycle()
+    val defaultDownloadAddonKey by AppSettings.defaultDownloadAddonKey.collectAsStateWithLifecycle()
     val wifiOnlyDownloads by AppSettings.wifiOnlyDownloads.collectAsStateWithLifecycle()
     val exportDownloads by AppSettings.exportDownloads.collectAsStateWithLifecycle()
     val syncDownloadedPlaylists by AppSettings.syncDownloadedPlaylists.collectAsStateWithLifecycle()
@@ -629,6 +632,19 @@ fun SettingsScreen(
                     subtitle = stringResource(R.string.download_quality_subtitle, downloadQuality.perTrack),
                     value = downloadQuality.localizedLabel(),
                     onClick = { onOpenChoice(SettingsChoiceKind.DOWNLOAD_QUALITY) },
+                )
+            }
+            val downloadAddonTitle = stringResource(R.string.download_addon_default)
+            val downloadAddonValue = defaultDownloadAddonKey?.let { key ->
+                DownloadAddonCatalog.displayName(key)
+            } ?: stringResource(R.string.download_addon_automatic)
+            row(downloadAddonTitle, "addon", "mornye", "source", "download") {
+                SettingsRow(
+                    icon = SfIcons.Apps,
+                    title = downloadAddonTitle,
+                    subtitle = stringResource(R.string.download_addon_default_subtitle),
+                    value = downloadAddonValue,
+                    onClick = { onOpenChoice(SettingsChoiceKind.DEFAULT_DOWNLOAD_ADDON) },
                 )
             }
             // Reads as part of Download quality above it, not as a setting
@@ -3098,6 +3114,7 @@ enum class SettingsChoiceKind(@param:StringRes val title: Int) {
     AUDIO_QUALITY_WIFI(R.string.on_wifi),
     AUDIO_QUALITY_CELLULAR(R.string.on_mobile_data),
     DOWNLOAD_QUALITY(R.string.download_quality),
+    DEFAULT_DOWNLOAD_ADDON(R.string.download_addon_default),
     AUTOMIX_PERFORMANCE(R.string.automix_performance),
     BIT_PERFECT(R.string.bit_perfect_output),
     FONT(R.string.font),
@@ -3177,6 +3194,32 @@ fun SettingsChoicePage(
                     footer = stringResource(R.string.download_quality_dialog_subtitle),
                 ) { quality ->
                     AppSettings.setDownloadQuality(quality)
+                    onChosen()
+                }
+            }
+
+            SettingsChoiceKind.DEFAULT_DOWNLOAD_ADDON -> {
+                val selected by AppSettings.defaultDownloadAddonKey.collectAsStateWithLifecycle()
+                // Collected here so an addon installed while Settings was open
+                // appears in the list without a trip back to Sources.
+                val packages by MorneyePackageManager.packages.collectAsStateWithLifecycle()
+                val addons = remember(packages) { DownloadAddonCatalog.options(packages) }
+                // Null is a real option here, so the choice list is keyed by
+                // the addon key with null meaning today's automatic resolver.
+                ChoiceGroup(
+                    options = listOf<String?>(null) + addons.map { it.key },
+                    selected = selected,
+                    label = { key ->
+                        key?.let { addons.firstOrNull { option -> option.key == it }?.displayName }
+                            ?: stringResource(R.string.download_addon_automatic)
+                    },
+                    detail = { key ->
+                        key?.let { addons.firstOrNull { option -> option.key == it }?.detail }
+                            ?: stringResource(R.string.download_addon_default_subtitle)
+                    },
+                    footer = stringResource(R.string.download_addon_default_subtitle),
+                ) { key ->
+                    AppSettings.setDefaultDownloadAddonKey(key)
                     onChosen()
                 }
             }

@@ -7,8 +7,9 @@ import androidx.compose.ui.layout.ContentScale
 import com.music.bitchord.R
 
 import android.net.Uri
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
@@ -109,6 +110,8 @@ fun SongActionsMenu(
     onAddToQueue: () -> Unit,
     onStartRadio: () -> Unit,
     onDownload: () -> Unit,
+    /** Long press on Download: choose a Mornye addon for this one download. */
+    onDownloadAddonChoice: (() -> Unit)? = null,
     /**
      * Copies this track to the WebDAV server. Null hides the row — the caller
      * passes one only for a readable device file while a server is
@@ -337,7 +340,7 @@ fun SongActionsMenu(
                 onClick = onAddToQueue,
             )
         }
-        DownloadRow(song, palette, isOffline, onDownload)
+        DownloadRow(song, palette, isOffline, onDownload, onDownloadAddonChoice)
         onRemoveFromCache?.let {
             ActionRow(
                 icon = SfIcons.Trash,
@@ -483,7 +486,13 @@ private fun neutralMenuPalette(): ArtworkPalette {
  * arrangement the sleep timer row already uses.
  */
 @Composable
-private fun DownloadRow(song: Song, palette: ArtworkPalette, isOffline: Boolean, onDownload: () -> Unit) {
+private fun DownloadRow(
+    song: Song,
+    palette: ArtworkPalette,
+    isOffline: Boolean,
+    onDownload: () -> Unit,
+    onDownloadAddonChoice: (() -> Unit)?,
+) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val active by Downloads.active.collectAsStateWithLifecycle()
@@ -535,6 +544,7 @@ private fun DownloadRow(song: Song, palette: ArtworkPalette, isOffline: Boolean,
             // failure whatever the sleeve happens to be tinted.
             tint = MaterialTheme.colorScheme.error,
             accent = MaterialTheme.colorScheme.error,
+            onLongClick = onDownloadAddonChoice,
             onClick = onDownload,
         )
 
@@ -551,6 +561,7 @@ private fun DownloadRow(song: Song, palette: ArtworkPalette, isOffline: Boolean,
                 icon = SfIcons.Download,
                 label = stringResource(R.string.download),
                 accent = palette.accent,
+                onLongClick = onDownloadAddonChoice,
                 onClick = onDownload,
             )
         }
@@ -878,6 +889,7 @@ private fun sleepTimerCountdown(): String? {
  * accent of its own passes that instead, so the row belongs to what it is
  * drawn on.
  */
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 internal fun ActionRow(
     icon: ImageVector,
@@ -888,6 +900,8 @@ internal fun ActionRow(
     enabled: Boolean = true,
     /** A dimmer second line — only the popup draws it, as iOS menus do. */
     description: String? = null,
+    /** Long press on this row, used only by Download to pick an addon. */
+    onLongClick: (() -> Unit)? = null,
     onClick: () -> Unit,
 ) {
     if (LocalActionRowStyle.current == ActionRowStyle.Menu) {
@@ -895,6 +909,7 @@ internal fun ActionRow(
             label = label,
             icon = icon,
             onClick = onClick,
+            onLongClick = onLongClick,
             description = description,
             value = value,
             iconTint = tint,
@@ -908,7 +923,7 @@ internal fun ActionRow(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clickable(enabled = enabled, onClick = onClick)
+            .combinedClickable(enabled = enabled, onClick = onClick, onLongClick = onLongClick)
             .padding(horizontal = 22.dp, vertical = 15.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {

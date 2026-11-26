@@ -140,6 +140,16 @@
     <string name="widget_pill_description">Lagu dengan Suka, Acak, dan kontrol pemutaran dalam satu baris.</string>
     <string name="widget_preview_pill">Judul lagu - Artis</string>
     <string name="download_quality">Kualitas unduhan</string>
+    <string name="download_addon_default">Addon unduhan bawaan</string>
+    <string name="download_addon_default_subtitle">Dipakai untuk ketukan biasa, Unduh semua, dan unduhan otomatis</string>
+    <string name="download_addon_automatic">Otomatis</string>
+    <string name="download_addon_chooser_title">Unduh dari addon</string>
+    <string name="download_addon_chooser_message">Hanya kali ini. Tahan Unduh, Unduh semua, atau tombol lagu yang tersimpan di cache untuk membuka ini.</string>
+    <string name="download_addon_failed_title">Tidak dapat mengunduh dari %1$s</string>
+    <string name="download_addon_failed_body">%1$s tidak dapat menyediakan “%2$s”. Tidak ada yang disimpan dari sumber lain. Periksa apakah addon terhubung, lalu coba lagi.</string>
+    <string name="download_addon_failed_cached">%1$s tidak dapat menyediakan “%2$s” untuk unduhan dari lagu yang tersimpan di cache ini. Periksa apakah addon terhubung, lalu coba lagi.</string>
+    <string name="download_addon_none_title">Tidak ada addon unduhan</string>
+    <string name="download_addon_none_body">Tidak ada ekstensi Mornye yang aktif dapat mengunduh lagu. Buka Sumber → Ekstensi Mornye untuk menambahkan atau mengaktifkan satu.</string>
     <string name="download_wifi_only">Unduh hanya lewat Wi-Fi</string>
     <string name="spatial_audio">Audio spasial</string>
     <string name="spatial_audio_subtitle">Melebarkan trek stereo untuk pengalaman yang lebih imersif</string>

@@ -9,7 +9,9 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.widthIn
@@ -135,6 +137,8 @@ internal fun QueueSelectionBar(
     onAction: suspend (List<Song>, QueueBulkAction) -> Boolean,
     onRemoveSelected: suspend (List<QueueEntryIdentity>) -> Unit,
     hazeState: HazeState,
+    /** Long press on Download: pick an addon for the selected queue tracks. */
+    onDownloadAddonChoice: (List<Song>) -> Unit = {},
 ) {
     val scope = rememberCoroutineScope()
     AnimatedVisibility(
@@ -172,29 +176,53 @@ internal fun QueueSelectionBar(
         ) {
             // Capped so the three actions stay grouped on tablets and unfolded foldables.
             Row(Modifier.widthIn(max = 520.dp).fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                BulkActionButton(BitChordIcons.Plus, stringResource(Res.string.queue_add_to_playlist), enabled) {
-                    run { onAction(songs, QueueBulkAction.PLAYLIST) }
-                }
-                BulkActionButton(Icons.Rounded.Delete, stringResource(Res.string.queue_selection_remove), enabled) {
-                    val identities = selectedQueueEntryIdentities(selected, timeline)
-                    run { onRemoveSelected(identities); true }
-                }
-                BulkActionButton(BitChordIcons.Download, stringResource(Res.string.queue_download), enabled) {
-                    run { onAction(songs, QueueBulkAction.DOWNLOAD) }
-                }
+                BulkActionButton(
+                    icon = BitChordIcons.Plus,
+                    label = stringResource(Res.string.queue_add_to_playlist),
+                    enabled = enabled,
+                    onClick = { run { onAction(songs, QueueBulkAction.PLAYLIST) } },
+                )
+                BulkActionButton(
+                    icon = Icons.Rounded.Delete,
+                    label = stringResource(Res.string.queue_selection_remove),
+                    enabled = enabled,
+                    onClick = {
+                        val identities = selectedQueueEntryIdentities(selected, timeline)
+                        run { onRemoveSelected(identities); true }
+                    },
+                )
+                BulkActionButton(
+                    icon = BitChordIcons.Download,
+                    label = stringResource(Res.string.queue_download),
+                    enabled = enabled,
+                    onClick = { run { onAction(songs, QueueBulkAction.DOWNLOAD) } },
+                    onLongClick = { if (enabled) onDownloadAddonChoice(songs) },
+                )
             }
         }
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun RowScope.BulkActionButton(icon: ImageVector, label: String, enabled: Boolean, onClick: () -> Unit) {
+private fun RowScope.BulkActionButton(
+    icon: ImageVector,
+    label: String,
+    enabled: Boolean,
+    onClick: () -> Unit,
+    onLongClick: (() -> Unit)? = null,
+) {
     val labelStyle = MaterialTheme.typography.labelMedium
     Column(
         modifier = Modifier
             .weight(1f)
             .clip(RoundedCornerShape(12.dp))
-            .clickable(enabled = enabled, role = Role.Button, onClick = onClick)
+            .combinedClickable(
+                enabled = enabled,
+                role = Role.Button,
+                onClick = onClick,
+                onLongClick = onLongClick,
+            )
             .alpha(if (enabled) 1f else 0.38f)
             .padding(horizontal = 4.dp, vertical = 8.dp),
         horizontalAlignment = Alignment.CenterHorizontally,

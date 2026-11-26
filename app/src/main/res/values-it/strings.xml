@@ -172,6 +172,16 @@
     <string name="widget_pill_description">Il brano con Mi piace, Casuale e controlli di riproduzione, su una sola riga.</string>
     <string name="widget_preview_pill">Titolo brano - Artista</string>
     <string name="download_quality">Qualità download</string>
+    <string name="download_addon_default">Addon di download predefinito</string>
+    <string name="download_addon_default_subtitle">Usato per un tocco normale, Scarica tutto e download automatici</string>
+    <string name="download_addon_automatic">Automatico</string>
+    <string name="download_addon_chooser_title">Scarica dall’addon</string>
+    <string name="download_addon_chooser_message">Solo questa volta. Tieni premuto Scarica, Scarica tutto o il pulsante di un brano in cache per aprire questo menu.</string>
+    <string name="download_addon_failed_title">Impossibile scaricare da %1$s</string>
+    <string name="download_addon_failed_body">%1$s non è riuscito a fornire «%2$s». Nulla è stato salvato da un’altra fonte. Controlla che l’addon sia connesso e riprova.</string>
+    <string name="download_addon_failed_cached">%1$s non è riuscito a fornire «%2$s» per questo download dai brani in cache. Controlla che l’addon sia connesso e riprova.</string>
+    <string name="download_addon_none_title">Nessun addon di download</string>
+    <string name="download_addon_none_body">Nessuna estensione Mornye attivata può scaricare brani. Apri Sorgenti → Estensioni Mornye per aggiungerne o attivarne una.</string>
     <string name="download_wifi_only">Scarica solo via Wi-Fi</string>
     <string name="convert_to_audio">Converti in audio</string>
     <string name="convert_to_video">Converti in video</string>

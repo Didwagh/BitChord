@@ -140,6 +140,16 @@
     <string name="widget_pill_description">单行显示曲目，以及喜欢、随机播放和播放控件。</string>
     <string name="widget_preview_pill">歌曲标题 - 艺人</string>
     <string name="download_quality">下载质量</string>
+    <string name="download_addon_default">默认下载插件</string>
+    <string name="download_addon_default_subtitle">用于普通点击、“全部下载”和自动下载</string>
+    <string name="download_addon_automatic">自动</string>
+    <string name="download_addon_chooser_title">从插件下载</string>
+    <string name="download_addon_chooser_message">仅此一次。长按“下载”“全部下载”或已缓存歌曲的按钮即可打开此菜单。</string>
+    <string name="download_addon_failed_title">无法从 %1$s 下载</string>
+    <string name="download_addon_failed_body">%1$s 无法提供“%2$s”。未从其他来源保存任何内容。请检查插件是否已连接，然后重试。</string>
+    <string name="download_addon_failed_cached">%1$s 无法为此次缓存歌曲下载提供“%2$s”。请检查插件是否已连接，然后重试。</string>
+    <string name="download_addon_none_title">没有下载插件</string>
+    <string name="download_addon_none_body">没有已启用的 Mornye 扩展可以下载歌曲。打开“来源”→“Mornye 扩展”以添加或启用。</string>
     <string name="download_wifi_only">仅通过 Wi-Fi 下载</string>
     <string name="spatial_audio">空间音频</string>
     <string name="spatial_audio_subtitle">拓宽立体声音轨，带来更沉浸的体验</string>

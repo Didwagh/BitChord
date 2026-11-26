@@ -112,6 +112,12 @@ object SourceResolver {
         else -> StreamRequest.Capped(quality.maxKbps)
     }
 
+    /** Only a strict one-shot ask widens a capped download; a saved default does not. */
+    internal fun requestForChosenAddon(
+        request: StreamRequest,
+        widenCapped: Boolean,
+    ): StreamRequest = if (widenCapped && request is StreamRequest.Capped) StreamRequest.Best else request
+
     /**
      * @param uri a `bitchord://source?...` URI as built by [SourceRegistry.trackUri].
      * @return the stream, or null when nothing enabled could serve the track.
@@ -181,6 +187,60 @@ object SourceResolver {
                 source.stream(trackId, request)
             }
         }?.copy(sourceConfigId = source.configId)
+    }
+
+    /**
+     * The one configured [MorneyeSource] whose stable addon key is [addonKey].
+     *
+     * Kept separate from the download lookup so the rule — Mornye only, by addon
+     * key rather than by a volatile `SourceConfig.id` — can be checked without
+     * standing up a registry or a runtime.
+     */
+    internal fun pinnedDownloadSource(
+        sources: List<MusicSource>,
+        addonKey: String,
+    ): MorneyeSource? {
+        sources.forEach { source ->
+            if (source is MorneyeSource && source.kind == SourceKind.MORNYE && source.addonKey == addonKey) {
+                return source
+            }
+        }
+        return null
+    }
+
+    /**
+     * The recording [target] from one explicitly chosen Mornye addon, or null
+     * when that addon is disabled, cannot export downloads, or has no match.
+     *
+     * This is a narrow, pinned version of [forDownload]: only the chosen addon
+     * is asked, by catalogue match rather than by a source row id, so it works
+     * for a YouTube song, a cached song, and an addon row alike. A strict,
+     * one-shot pick widens a Standard (capped) request to [StreamRequest.Best]:
+     * refusing to ask the named addon because the ceiling is 128kbps would
+     * answer that download with YouTube instead. The softer saved default
+     * stays inside the configured Download quality. Either way the bytes
+     * still decide the file's label downstream.
+     */
+    suspend fun forDownloadFromAddon(
+        addonKey: String,
+        target: TrackMatcher.Target,
+        request: StreamRequest = requestForDownload(),
+        keep: suspend (SourceStream) -> SourceStream? = { it },
+        budgetMs: Long? = null,
+        widenCapped: Boolean = false,
+    ): SourceStream? {
+        if (target.title.isBlank()) return null
+        val source = pinnedDownloadSource(SourceRegistry.activeForDownload(), addonKey) ?: return null
+        val effective = requestForChosenAddon(request, widenCapped)
+        return bestAcross(
+            listOf(source),
+            target,
+            effective,
+            waitForAll = true,
+            strictLength = target.durationSec != null,
+            refine = { _, stream -> keep(stream) },
+            timeoutMs = budgetMs,
+        )?.second
     }
 
     /**

@@ -357,6 +357,7 @@ internal fun InlineQueue(
     undoNotice: @Composable (HazeState) -> Unit = {},
     selection: QueueSelectionState? = null,
     onBulkAction: suspend (List<Song>, QueueBulkAction) -> Boolean = { _, _ -> false },
+    onDownloadAddonChoice: (List<Song>) -> Unit = {},
     onRemoveSelected: suspend (List<QueueEntryIdentity>) -> Unit = {},
     /** Null hides the sections' Add all to playlist buttons rather than leaving them inert. */
     onAddAllToPlaylist: ((List<Song>) -> Unit)? = null,
@@ -677,6 +678,7 @@ internal fun InlineQueue(
                     onBulkAction,
                     onRemoveSelected,
                     hazeState,
+                    onDownloadAddonChoice,
                 )
             }
         }

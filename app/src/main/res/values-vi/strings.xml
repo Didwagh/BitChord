@@ -154,6 +154,16 @@
     <string name="widget_pill_description">Bản nhạc kèm Thích, trộn bài và điều khiển phát trên một hàng.</string>
     <string name="widget_preview_pill">Tên bài hát - Nghệ sĩ</string>
     <string name="download_quality">Chất lượng tải xuống</string>
+    <string name="download_addon_default">Addon tải xuống mặc định</string>
+    <string name="download_addon_default_subtitle">Dùng cho lần chạm thường, Tải tất cả và tải tự động</string>
+    <string name="download_addon_automatic">Tự động</string>
+    <string name="download_addon_chooser_title">Tải từ addon</string>
+    <string name="download_addon_chooser_message">Chỉ lần này. Nhấn giữ Tải xuống, Tải tất cả hoặc nút của bài đã lưu trong bộ nhớ đệm để mở mục này.</string>
+    <string name="download_addon_failed_title">Không thể tải từ %1$s</string>
+    <string name="download_addon_failed_body">%1$s không thể cung cấp “%2$s”. Không có gì được lưu từ nguồn khác. Hãy kiểm tra addon đã kết nối chưa, rồi thử lại.</string>
+    <string name="download_addon_failed_cached">%1$s không thể cung cấp “%2$s” cho lần tải từ các bài trong bộ nhớ đệm này. Hãy kiểm tra addon đã kết nối chưa, rồi thử lại.</string>
+    <string name="download_addon_none_title">Không có addon tải xuống</string>
+    <string name="download_addon_none_body">Không có tiện ích Mornye nào được bật có thể tải bài hát. Mở Nguồn → Tiện ích Mornye để thêm hoặc bật một tiện ích.</string>
     <string name="download_wifi_only">Chỉ tải xuống qua Wi-Fi</string>
     <string name="convert_to_audio">Chuyển đổi thành âm thanh</string>
     <string name="convert_to_video">Chuyển đổi thành video</string>

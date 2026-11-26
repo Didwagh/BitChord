@@ -190,6 +190,16 @@
     <string name="widget_pill_description">곡 정보, 좋아요, 셔플, 재생 컨트롤 버튼을 행 하나에 배열합니다.</string>
     <string name="widget_preview_pill">곡 제목 - 아티스트</string>
     <string name="download_quality">다운로드 품질</string>
+    <string name="download_addon_default">기본 다운로드 애드온</string>
+    <string name="download_addon_default_subtitle">일반 탭, 모두 다운로드 및 자동 다운로드에 사용됩니다</string>
+    <string name="download_addon_automatic">자동</string>
+    <string name="download_addon_chooser_title">애드온에서 다운로드</string>
+    <string name="download_addon_chooser_message">이번 한 번만입니다. 다운로드, 모두 다운로드 또는 캐시된 곡의 버튼을 길게 눌러 열 수 있습니다.</string>
+    <string name="download_addon_failed_title">%1$s에서 다운로드할 수 없습니다</string>
+    <string name="download_addon_failed_body">%1$s가 “%2$s”를 제공할 수 없습니다. 다른 소스에서 저장한 것은 없습니다. 애드온이 연결되어 있는지 확인한 후 다시 시도하세요.</string>
+    <string name="download_addon_failed_cached">이 캐시된 곡 다운로드에서 %1$s가 “%2$s”를 제공할 수 없습니다. 애드온이 연결되어 있는지 확인한 후 다시 시도하세요.</string>
+    <string name="download_addon_none_title">다운로드 애드온이 없습니다</string>
+    <string name="download_addon_none_body">활성화된 Mornye 확장 프로그램 중 곡을 다운로드할 수 있는 것이 없습니다. 소스 → Mornye 확장 프로그램을 열어 추가하거나 활성화하세요.</string>
     <string name="download_wifi_only">Wi-Fi에서만 다운로드</string>
     <string name="convert_to_audio">오디오로 변환</string>
     <string name="convert_to_video">비디오로 변환</string>

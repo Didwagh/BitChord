@@ -140,6 +140,16 @@
     <string name="widget_pill_description">曲名といいね、シャッフル、再生コントロールを1行に。</string>
     <string name="widget_preview_pill">曲名 - アーティスト</string>
     <string name="download_quality">ダウンロード品質</string>
+    <string name="download_addon_default">既定のダウンロードアドオン</string>
+    <string name="download_addon_default_subtitle">通常のタップ、すべてダウンロード、自動ダウンロードに使用されます</string>
+    <string name="download_addon_automatic">自動</string>
+    <string name="download_addon_chooser_title">アドオンからダウンロード</string>
+    <string name="download_addon_chooser_message">今回だけです。「ダウンロード」「すべてダウンロード」、またはキャッシュ済み曲のボタンを長押しして開いてください。</string>
+    <string name="download_addon_failed_title">%1$s からダウンロードできませんでした</string>
+    <string name="download_addon_failed_body">%1$s が「%2$s」を提供できませんでした。他のソースからは何も保存されていません。アドオンが接続されているか確認して、もう一度お試しください。</string>
+    <string name="download_addon_failed_cached">このキャッシュ済み曲のダウンロードで、%1$s が「%2$s」を提供できませんでした。アドオンが接続されているか確認して、もう一度お試しください。</string>
+    <string name="download_addon_none_title">ダウンロードできるアドオンがありません</string>
+    <string name="download_addon_none_body">有効な Mornye 拡張機能に曲をダウンロードできるものがありません。「ソース」→「Mornye 拡張機能」で追加または有効化してください。</string>
     <string name="download_wifi_only">Wi-Fi接続時のみダウンロード</string>
     <string name="spatial_audio">空間オーディオ</string>
     <string name="spatial_audio_subtitle">よりイマーシブな体験のためにステレオトラックを広げます</string>

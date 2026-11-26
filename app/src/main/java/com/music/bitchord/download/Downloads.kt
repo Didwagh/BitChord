@@ -16,6 +16,7 @@ import com.music.bitchord.data.sources.SourceResolver
 import com.music.bitchord.data.sources.SourceStream
 import com.music.bitchord.data.sources.StreamFormat
 import com.music.bitchord.data.sources.TrackMatcher
+import com.music.bitchord.data.sources.mornye.DownloadAddonCatalog
 import com.music.bitchord.playback.AudioCache
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Deferred
@@ -147,6 +148,15 @@ object Downloads {
      */
     private val running = LinkedHashMap<String, Job?>()
 
+    /**
+     * The per-track addon preference that survives the permission round trip
+     * and the service's queue. Read by [run] once the worker has the song.
+     */
+    private val addonChoiceFor = java.util.concurrent.ConcurrentHashMap<String, DownloadAddonChoice>()
+
+    /** Whether this track was asked from Cached songs, for the failure popup's wording. */
+    private val cacheHintFor = java.util.concurrent.ConcurrentHashMap<String, Boolean>()
+
     fun init(context: Context) {
         prefs = context.getSharedPreferences("bitchord_settings", Context.MODE_PRIVATE)
         _saved.value = runCatching {
@@ -179,19 +189,34 @@ object Downloads {
      * @param from what release this track was asked for as part of, when it was
      *   one of many. Carried no further than [DownloadSession], which is the
      *   only thing that has to say *why* forty tracks are in the queue.
+     * @param choice an explicitly chosen or preferred Mornye addon. Carried to
+     *   [prepare] under the track id, so the service does not need to know
+     *   where the tap came from.
      */
-    fun enqueue(context: Context, song: Song, from: String? = null) {
+    fun enqueue(context: Context, song: Song, from: String? = null, choice: DownloadAddonChoice? = null) {
         val id = song.videoId
         // A copy straight out of the song cache spends no data, so the Wi-Fi
-        // rule has nothing to say about it.
-        if (!AppSettings.downloadsAllowedNow && !servableFromCache(id)) {
+        // rule has nothing to say about it — unless the listener explicitly
+        // named an addon, in which case the cache is not being used at all.
+        if (!AppSettings.downloadsAllowedNow && (choice?.strict == true || !servableFromCache(id))) {
             // Distinct from the duplicate-tap no-op below: nothing is in flight
             // here to leave alone, and a refusal nobody is told about reads as a
             // dead button. A download already queued or running started on a
             // connection that allowed it and is none of this check's business.
             val inFlight = _active.value[id]
             if (inFlight !is DownloadState.Queued && inFlight !is DownloadState.Running) {
-                DownloadSession.queued(song, from)
+                DownloadSession.queued(song, from, choice)
+                // A strict pick cannot quietly use the cache, so this is a
+                // failed addon ask like any other. The softer saved default
+                // keeps the old toast from the tap that started it.
+                if (choice?.strict == true) {
+                    DownloadFailureSignal.report(
+                        choice.addonKey,
+                        DownloadAddonCatalog.displayName(choice.addonKey),
+                        song.title,
+                        servableFromCache(id),
+                    )
+                }
                 fail(id, WIFI_ONLY_REFUSAL)
             }
             return
@@ -200,8 +225,11 @@ object Downloads {
             if (id in pending || id in running) return
             pending[id] = song
         }
+        // Set only once the track has actually joined the queue: a duplicate
+        // tap must not leave a stale choice behind for a later retry.
+        if (choice != null) addonChoiceFor[id] = choice else addonChoiceFor.remove(id)
         _active.update { it + (id to DownloadState.Queued) }
-        DownloadSession.queued(song, from)
+        DownloadSession.queued(song, from, choice)
 
         val app = context.applicationContext
         runCatching {
@@ -212,6 +240,7 @@ object Downloads {
             // looking accepted forever.
             Log.w(TAG, "could not start the download service: ${it.message}")
             synchronized(lock) { pending.remove(id) }
+            addonChoiceFor.remove(id)
             fail(id, "Downloads can't start right now")
         }
     }
@@ -259,6 +288,8 @@ object Downloads {
         }
         job?.cancel()
         clear(videoId)
+        addonChoiceFor.remove(videoId)
+        cacheHintFor.remove(videoId)
         // A download the user called off is not something they need reminding to
         // check on, so it leaves the manager rather than sitting in it as a
         // permanent "cancelled" row.
@@ -281,7 +312,12 @@ object Downloads {
      *   listener, or already in flight from a tap. A track that failed, or was
      *   never reached, is not among them.
      */
-    internal suspend fun downloadNow(context: Context, songs: List<Song>, from: String?): Set<String> {
+    internal suspend fun downloadNow(
+        context: Context,
+        songs: List<Song>,
+        from: String?,
+        choice: DownloadAddonChoice? = null,
+    ): Set<String> {
         val handled = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
         val claimed = synchronized(lock) {
             songs.filter { song ->
@@ -296,8 +332,10 @@ object Downloads {
             }
         }
         claimed.forEach { song ->
-            _active.update { it + (song.videoId to DownloadState.Queued) }
-            DownloadSession.queued(song, from)
+            val id = song.videoId
+            if (choice != null) addonChoiceFor[id] = choice else addonChoiceFor.remove(id)
+            _active.update { it + (id to DownloadState.Queued) }
+            DownloadSession.queued(song, from, choice)
         }
         val slots = Semaphore(BATCH_WORKERS)
         try {
@@ -324,6 +362,7 @@ object Downloads {
             claimed.forEach { song ->
                 val id = song.videoId
                 onIdle(id)
+                cacheHintFor.remove(id)
                 // A failure stays up to be read; a track this batch never got
                 // to the end of has nothing to report.
                 val state = _active.value[id]
@@ -959,7 +998,7 @@ object Downloads {
         DownloadSession.running(id, 0f)
 
         try {
-            val plan = prepare(context, song)
+            val plan = prepare(context, song, addonChoiceFor[id])
             // The manager is showing the row that was tapped, which for a music
             // video is the wrong title and the wrong cover for the file actually
             // being written. Corrected here rather than left to disagree with
@@ -968,9 +1007,24 @@ object Downloads {
             transfer(context, song, plan)
         } catch (e: CancellationException) {
             clear(id)
+            cacheHintFor.remove(id)
             throw e
         } catch (e: Exception) {
             Log.w(TAG, "download failed for $id: ${e.message}", e)
+            // A strict long press is a promise that no other source will be
+            // used. When that attempt fails, say so in the app — never as a
+            // system notification, and never with a raw provider payload. A
+            // saved default was allowed to fall back, so a later failure is
+            // not evidence that *it* let the listener down.
+            val choice = addonChoiceFor[id]
+            if (choice?.strict == true) {
+                DownloadFailureSignal.report(
+                    addonKey = choice.addonKey,
+                    addonName = DownloadAddonCatalog.displayName(choice.addonKey),
+                    title = song.title,
+                    wasCached = cacheHintFor[id] == true,
+                )
+            }
             fail(id, e.friendly())
         }
     }
@@ -996,7 +1050,22 @@ object Downloads {
      * running for a track that is still queued — or for one that gets cancelled
      * before its turn — and a preparation is not a download.
      */
-    internal suspend fun prepare(context: Context, song: Song): Prepared = withContext(Dispatchers.IO) {
+    internal suspend fun prepare(
+        context: Context,
+        song: Song,
+        choice: DownloadAddonChoice? = null,
+    ): Prepared = withContext(Dispatchers.IO) {
+        // A strict long press means "from this addon", so even a cached copy
+        // is passed over and the failure is reported if it cannot be had.
+        // The softer saved default is a preference: a complete copy already
+        // on disk still answers first, spending no data and needing no source.
+        if (choice?.strict == true) {
+            cacheHintFor[song.videoId] = song.videoId in fromCache
+            fromCache.remove(song.videoId)
+        } else {
+            cacheHintFor.remove(song.videoId)
+        }
+
         // Downloads preserve the exact item the listener picked. Catalogue
         // matching is a manual playback action and must not silently change a
         // download or its filename.
@@ -1028,7 +1097,8 @@ object Downloads {
         }
 
         // Asked for from the Cached songs folder: the copy already on disk is
-        // the answer, if it is whole. See [fromCache].
+        // the answer, if it is whole. A strict addon choice removed its marker
+        // above; a saved default still takes the no-data path. See [fromCache].
         if (fromCache.remove(song.videoId)) {
             AudioCache.completeCopyOf(song.videoId)?.let(::cachedRoute)?.let { route ->
                 Log.d(TAG, "downloading ${song.videoId} from the song cache as .${route.extension}")
@@ -1036,10 +1106,14 @@ object Downloads {
             }
         }
         val route = try {
-            routeFor(context, track, quality)
+            routeFor(context, track, quality, choice)
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
+            // A strict one-shot choice has to fail loudly: falling back to the
+            // cache here would hide exactly the failure the popup is meant to
+            // report. The softer saved default keeps the old cache safety net.
+            if (choice?.strict == true) throw e
             // No connection, or nothing would resolve. A complete copy in the
             // song cache is still the song, and better saved than refused.
             AudioCache.completeCopyOf(song.videoId)?.let(::cachedRoute)
@@ -1247,7 +1321,26 @@ object Downloads {
      *   than to the middle of this one. [Downloader.fetch] resolves again after
      *   a mid-download refusal and has to ask for the same rung it started on.
      */
-    private suspend fun routeFor(context: Context, track: Song, quality: DownloadQuality): Route {
+    private suspend fun routeFor(
+        context: Context,
+        track: Song,
+        quality: DownloadQuality,
+        choice: DownloadAddonChoice? = null,
+    ): Route {
+        // An explicit addon outranks a row's pinned source: the listener just
+        // named where this file must come from, whether the row began life on
+        // YouTube, in the cache, or in a different addon.
+        if (choice != null) {
+            fromChosenAddon(track, quality, choice)?.let { kept ->
+                sourceRoute(context, track, kept)?.let { return it }
+            }
+            if (choice.strict) {
+                val name = DownloadAddonCatalog.displayName(choice.addonKey)
+                error("Couldn't download this song from $name — check that it's still connected")
+            }
+            // A saved default is a preference, not a cage: carry on to the row,
+            // the full source race, and YouTube as before.
+        }
         val row = SourceRegistry.parseTrackKey(track.videoId)
         row?.let { (configId, trackId) ->
             fromRow(track, configId, trackId, quality)?.let { kept ->
@@ -1362,6 +1455,49 @@ object Downloads {
             downloadFormat = if (copy.extension == "flac") "FLAC" else null,
             write = { sink, onProgress -> AudioCache.copyOut(copy, sink, onProgress) },
         )
+    }
+
+    /**
+     * The stream to keep for [track] from one named Mornye addon.
+     *
+     * The same bounded, byte-probed path as [fromSources], narrowed to a single
+     * source. No YouTube and no second addon is consulted here; what this
+     * returns is what the listener asked for.
+     */
+    private suspend fun fromChosenAddon(
+        track: Song,
+        quality: DownloadQuality,
+        choice: DownloadAddonChoice,
+    ): Kept? {
+        val target = TrackMatcher.targetOf(track)
+        val probes = java.util.concurrent.ConcurrentHashMap<String, Downloader.Probe>()
+        val stream = withTimeoutOrNull(SOURCE_LOOKUP_MS + LOOKUP_BACKSTOP_MS) {
+            try {
+                SourceResolver.forDownloadFromAddon(
+                    choice.addonKey,
+                    target,
+                    SourceResolver.requestForDownload(quality),
+                    keep = { candidate ->
+                        keepable(candidate, target.durationSec)
+                            ?.also { probes[it.stream.url] = it.probe }
+                            ?.stream
+                    },
+                    budgetMs = SOURCE_LOOKUP_MS,
+                    // Only a strict one-shot pick widens a capped download to
+                    // Best. A saved default is still bound by Download quality.
+                    widenCapped = choice.strict,
+                )
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                // Never print the provider's message here: addon failures can
+                // carry signed URLs or session material. The in-app popup has
+                // the song and addon names, which is all a listener needs.
+                Log.w(TAG, "chosen addon lookup failed for ${track.videoId} (${e.javaClass.simpleName})")
+                null
+            }
+        }
+        return stream?.let { probes[it.url]?.let { probe -> Kept(it, probe) } }
     }
 
     /**
@@ -1521,6 +1657,10 @@ object Downloads {
     private fun fail(videoId: String, reason: String) {
         _active.update { it + (videoId to DownloadState.Failed(reason)) }
         DownloadSession.failed(videoId, reason)
+        // The failed row keeps its own copy of the choice for a retry; these
+        // maps are only for a download that is still running.
+        addonChoiceFor.remove(videoId)
+        cacheHintFor.remove(videoId)
     }
 
     /**

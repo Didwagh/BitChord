@@ -1,6 +1,7 @@
 package com.music.bitchord
 
 import com.music.bitchord.data.model.Song
+import com.music.bitchord.download.DownloadAddonChoice
 import com.music.bitchord.download.DownloadProgress
 import com.music.bitchord.download.DownloadSession
 import com.music.bitchord.download.DownloadTarget
@@ -138,6 +139,20 @@ class DownloadSessionTest {
         assertEquals(1, state.items.size)
         assertEquals(DownloadProgress.Queued, state.items.single().progress)
         assertEquals(0, state.failed)
+    }
+
+    @Test
+    fun `a retry keeps the addon the listener picked`() {
+        val choice = DownloadAddonChoice("qobuz-web", strict = true)
+        DownloadSession.queued(song("a"), null, choice)
+        DownloadSession.failed("a", "nope")
+        // The manager's retry hands the row's own choice back; a fresh tap
+        // must not silently inherit it.
+        DownloadSession.queued(song("a"), null, choice)
+
+        assertEquals(choice, DownloadSession.state.value.items.single().addonChoice)
+        DownloadSession.queued(song("a"))
+        assertNull(DownloadSession.state.value.items.single().addonChoice)
     }
 
     // ---- How far through it is ---------------------------------------------

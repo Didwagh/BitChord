@@ -3,6 +3,8 @@ package com.music.bitchord.ui.screens
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -54,6 +56,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
@@ -136,6 +139,11 @@ class LocalFolder(
      * header, and Download on the selection.
      */
     val onDownload: ((List<Song>) -> Unit)? = null,
+    /**
+     * Cached songs only: long press a row's download button, Download all, or
+     * the selection's Download action to pick an addon for that batch.
+     */
+    val onDownloadAddonChoice: ((List<Song>) -> Unit)? = null,
     /** Cached songs only: takes the selection out of the song cache. */
     val onRemoveFromCache: ((List<Song>) -> Unit)? = null,
     /** Which ways of looking at the tracks this folder offers, in order. */
@@ -360,7 +368,15 @@ internal fun LazyListScope.localFolderItems(
                     onMore = { onSongLongPress(song) },
                     onSwipeToQueue = { onSongSwipe(song) },
                     trailing = folder.onDownload?.let { download ->
-                        { RowDownloadButton(song, palette) { download(listOf(song)) } }
+                        {
+                            RowDownloadButton(
+                                song = song,
+                                palette = palette,
+                                onDownloadAddonChoice = folder.onDownloadAddonChoice?.let { choose ->
+                                    { choose(listOf(song)) }
+                                },
+                            ) { download(listOf(song)) }
+                        }
                     },
                 )
                 if (index < songs.lastIndex) FolderDivider(palette)
@@ -858,6 +874,7 @@ internal fun LocalFolderSelectionBar(
                 color = MaterialTheme.colorScheme.primary,
                 enabled = count > 0,
                 onClick = { download(chosen()) },
+                onLongClick = folder.onDownloadAddonChoice?.let { choose -> { choose(chosen()) } },
             )
         }
         folder.onRemoveFromCache?.let { remove ->
@@ -890,8 +907,14 @@ internal fun LocalFolderSelectionBar(
  * Read straight from [Downloads] where it is drawn, as the song menu's download
  * row does, so it moves as the download does without the page reloading.
  */
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun RowDownloadButton(song: Song, palette: ArtworkPalette, onDownload: () -> Unit) {
+private fun RowDownloadButton(
+    song: Song,
+    palette: ArtworkPalette,
+    onDownloadAddonChoice: (() -> Unit)? = null,
+    onDownload: () -> Unit,
+) {
     val active by Downloads.active.collectAsStateWithLifecycle()
     val saved by Downloads.saved.collectAsStateWithLifecycle()
     val state = active[song.videoId]
@@ -900,12 +923,16 @@ private fun RowDownloadButton(song: Song, palette: ArtworkPalette, onDownload: (
         modifier = Modifier
             .size(36.dp)
             .clip(CircleShape)
-            .clickable(enabled = !done) {
-                when (state) {
-                    is DownloadState.Queued, is DownloadState.Running -> Downloads.cancel(song.videoId)
-                    else -> onDownload()
-                }
-            },
+            .combinedClickable(
+                enabled = !done,
+                onClick = {
+                    when (state) {
+                        is DownloadState.Queued, is DownloadState.Running -> Downloads.cancel(song.videoId)
+                        else -> onDownload()
+                    }
+                },
+                onLongClick = onDownloadAddonChoice,
+            ),
         contentAlignment = Alignment.Center,
     ) {
         when (state) {
@@ -945,8 +972,26 @@ private fun RowDownloadButton(song: Song, palette: ArtworkPalette, onDownload: (
 }
 
 @Composable
-private fun SelectionAction(icon: ImageVector, label: String, color: Color, enabled: Boolean, onClick: () -> Unit) {
-    TextButton(onClick = onClick, enabled = enabled) {
+private fun SelectionAction(
+    icon: ImageVector,
+    label: String,
+    color: Color,
+    enabled: Boolean,
+    onClick: () -> Unit,
+    onLongClick: (() -> Unit)? = null,
+) {
+    // Keep the Button's own tap handling; a second clickable on the same node
+    // swallows it. A pointer listener alongside it only claims long presses.
+    val longPress = onLongClick
+    TextButton(
+        onClick = onClick,
+        enabled = enabled,
+        modifier = if (longPress != null) {
+            Modifier.pointerInput(longPress) { detectTapGestures(onLongPress = { longPress() }) }
+        } else {
+            Modifier
+        },
+    ) {
         Icon(icon, contentDescription = null, tint = color, modifier = Modifier.size(18.dp))
         Spacer(Modifier.width(4.dp))
         Text(label, color = color)

@@ -15,6 +15,7 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.result.ActivityResultLauncher
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
@@ -103,6 +104,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.key
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.runtime.setValue
@@ -156,6 +158,7 @@ import com.music.bitchord.data.model.UiState
 import com.music.bitchord.data.model.UserPlaylist
 import com.music.bitchord.data.model.EntityType
 import com.music.bitchord.data.model.SearchHistoryEntity
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.withContext
@@ -163,6 +166,7 @@ import com.music.bitchord.data.model.durationMillis
 import com.music.bitchord.data.scrobbling.LastFM
 import com.music.bitchord.data.settings.AppSettings
 import com.music.bitchord.data.settings.BitPerfectMode
+import com.music.bitchord.data.sources.mornye.DownloadAddonCatalog
 import com.music.bitchord.data.sources.mornye.MorneyePackageManager
 import com.music.bitchord.data.sources.mornye.MorneyeVerificationSignal
 import com.music.bitchord.ui.AddonBlockedAlert
@@ -245,6 +249,9 @@ import com.music.bitchord.playback.upgradeQuality
 import com.music.bitchord.playback.revertToOriginal
 import com.music.bitchord.playback.swapToVersion
 import com.music.bitchord.playback.smart.VersionAudioAligner
+import com.music.bitchord.download.DownloadAddonChoice
+import com.music.bitchord.download.DownloadAddonPreference
+import com.music.bitchord.download.DownloadFailureSignal
 import com.music.bitchord.download.DownloadSession
 import com.music.bitchord.download.DownloadStore
 import com.music.bitchord.download.MediaTagger
@@ -252,6 +259,7 @@ import com.music.bitchord.download.DownloadTarget
 import com.music.bitchord.download.Downloads
 import com.music.bitchord.ui.components.BrowseActionsMenu
 import com.music.bitchord.ui.components.BrowseTarget
+import com.music.bitchord.ui.components.ChoiceAlert
 import com.music.bitchord.ui.components.ConfirmationAlert
 import com.music.bitchord.ui.components.InfoAlert
 import com.music.bitchord.ui.components.DownloadManagerPage
@@ -430,6 +438,302 @@ internal fun inPageOrder(shown: List<String>, page: List<String>): Boolean {
     return shown.all { key -> rest.asSequence().any { it == key } }
 }
 
+/** The tracks a long-pressed download chooser is answering, and where they came from. */
+private data class DownloadAddonChooserTarget(
+    val songs: List<Song>,
+    val fromCache: Boolean,
+)
+
+/**
+ * The alerts that belong to downloads: the long-press chooser, a failed chosen
+ * addon, and an addon that had to be skipped.
+ *
+ * Kept out of [BitChordApp] because that composable is already at the JVM's
+ * 64 KB method limit. The chooser and failure use their own window so a sheet
+ * or track menu cannot paint over them.
+ */
+@OptIn(ExperimentalHazeMaterialsApi::class)
+@Composable
+private fun DownloadLauncher.DownloadAlerts(
+    hazeState: HazeState,
+    behindOtherWindow: Boolean,
+) {
+    val packages by MorneyePackageManager.packages.collectAsStateWithLifecycle()
+    val failure by DownloadFailureSignal.event.collectAsStateWithLifecycle()
+    val options = remember(packages) { DownloadAddonCatalog.options(packages) }
+    // A failure that lands while a chooser is up takes over rather than
+    // stacking two dialogs.
+    LaunchedEffect(failure) {
+        if (failure != null) dismissChooser()
+    }
+    BackHandler(enabled = chooser != null) { dismissChooser() }
+    BackHandler(enabled = failure != null) { DownloadFailureSignal.dismiss() }
+
+    chooser?.let { target ->
+        if (options.isEmpty()) {
+            InfoAlert(
+                hazeState = hazeState,
+                title = stringResource(R.string.download_addon_none_title),
+                description = stringResource(R.string.download_addon_none_body),
+                onDismiss = { dismissChooser() },
+                inOwnWindow = true,
+            )
+        } else {
+            ChoiceAlert(
+                hazeState = hazeState,
+                title = stringResource(R.string.download_addon_chooser_title),
+                message = stringResource(R.string.download_addon_chooser_message),
+                options = options.map { it.key },
+                selected = "",
+                label = { key -> options.firstOrNull { it.key == key }?.displayName ?: key },
+                detail = { key -> options.firstOrNull { it.key == key }?.detail },
+                onSelect = { key ->
+                    val choice = DownloadAddonChoice(key, strict = true)
+                    if (target.fromCache) fromCache(target.songs, choice) else tracks(target.songs, choice)
+                    dismissChooser()
+                },
+                onDismiss = { dismissChooser() },
+                inOwnWindow = true,
+            )
+        }
+    }
+    failure?.let { event ->
+        InfoAlert(
+            hazeState = hazeState,
+            title = stringResource(R.string.download_addon_failed_title, event.addonName),
+            description = stringResource(
+                if (event.wasCached) R.string.download_addon_failed_cached
+                else R.string.download_addon_failed_body,
+                event.addonName,
+                event.title,
+            ),
+            onDismiss = DownloadFailureSignal::dismiss,
+            inOwnWindow = behindOtherWindow || chooser != null,
+        )
+    }
+    addonLeftOut?.let { (addon, why) ->
+        InfoAlert(
+            hazeState = hazeState,
+            title = stringResource(R.string.download_addon_left_out_title, addon),
+            description = when (why) {
+                SourceRegistry.DownloadExclusion.DOWNLOADS_NOT_ALLOWED ->
+                    stringResource(R.string.download_addon_not_allowed, addon)
+                SourceRegistry.DownloadExclusion.NEEDS_LOSSLESS_OUTPUT ->
+                    stringResource(R.string.download_addon_needs_lossless_output, addon)
+            },
+            onDismiss = { addonLeftOut = null },
+            inOwnWindow = behindOtherWindow,
+        )
+    }
+}
+
+/**
+ * Everything between a Download tap and the queue.
+ *
+ * This lives outside [BitChordApp] because that composable is already close to
+ * the JVM's 64 KB method limit. It is deliberately not a ViewModel: all of its
+ * state is the short-lived permission round trip, and the queue itself belongs
+ * to [Downloads].
+ */
+private class DownloadLauncher(
+    private val context: Context,
+    private val scope: CoroutineScope,
+    private val currentSongId: () -> String?,
+    private val currentDurationMs: () -> Long,
+) {
+    lateinit var notifyPermission: ActivityResultLauncher<String>
+    lateinit var storagePermission: ActivityResultLauncher<String>
+
+    /** Set by a long press, owned here so the main composable stays small. */
+    var chooser by mutableStateOf<DownloadAddonChooserTarget?>(null)
+        private set
+
+    /** An addon skipped for a download, and why; drawn with the other alerts. */
+    var addonLeftOut by mutableStateOf<Pair<String, SourceRegistry.DownloadExclusion>?>(null)
+
+    fun chooseAddon(songs: List<Song>, fromCache: Boolean) {
+        chooser = DownloadAddonChooserTarget(songs, fromCache)
+    }
+
+    fun dismissChooser() {
+        chooser = null
+    }
+
+    private var pending = emptyList<Song>()
+    private var pendingFrom: DownloadTarget? = null
+    private var pendingChoice: DownloadAddonChoice? = null
+
+    fun onStorageResult(granted: Boolean) {
+        val songs = pending
+        val from = pendingFrom
+        val choice = pendingChoice
+        pending = emptyList()
+        pendingFrom = null
+        pendingChoice = null
+        when {
+            songs.isEmpty() -> Unit
+            granted -> {
+                songs.forEach { Downloads.enqueue(context, it, from?.title, choice) }
+                if (from != null) Downloads.markRequested(from.id, songs.map { it.videoId })
+            }
+            // Below API 29 there is no other way to reach the Music folder.
+            else -> Toast
+                .makeText(context, context.getString(R.string.storage_required_save), Toast.LENGTH_SHORT)
+                .show()
+        }
+    }
+
+    /** A saved addon cannot outlive uninstall, disable, or a dropped capability. */
+    private fun effectiveAddonChoice(explicit: DownloadAddonChoice?): DownloadAddonChoice? {
+        if (explicit != null) return explicit
+        val saved = DownloadAddonPreference.fromSaved(AppSettings.defaultDownloadAddonKey.value) ?: return null
+        return saved.takeIf { DownloadAddonCatalog.hasUsableAddon(it.addonKey) }
+    }
+
+    fun start(
+        requested: List<Song>,
+        from: DownloadTarget?,
+        choice: DownloadAddonChoice? = null,
+    ) {
+        val resolved = effectiveAddonChoice(choice)
+        val saved = Downloads.saved.value
+        // An album page bills its artwork in the header: its rows carry no
+        // cover, and a download written without one cannot adopt it later.
+        val songs = requested
+            .filter { it.videoId !in saved }
+            .map { song ->
+                val cover = from?.thumbnailUrl
+                if (song.thumbnailUrl.isNullOrBlank() && !cover.isNullOrBlank()) {
+                    song.copy(thumbnailUrl = cover)
+                } else {
+                    song
+                }
+            }
+        // Checked here as well as in [Downloads.enqueue], which has to refuse
+        // every caller. Only the tap knows the batch size, so only here can a
+        // Wi-Fi refusal be said once. A saved default can still use a cached
+        // copy; a strict pick cannot.
+        val blocked = songs.isNotEmpty() && !AppSettings.downloadsAllowedNow &&
+            (resolved?.strict == true || songs.none { Downloads.servableFromCache(it.videoId) })
+        if (songs.isNotEmpty() && !blocked) {
+            val needsStorage = AppSettings.exportDownloads.value && DownloadStore.needsLegacyPermission() &&
+                ContextCompat.checkSelfPermission(
+                    context,
+                    Manifest.permission.WRITE_EXTERNAL_STORAGE,
+                ) != PackageManager.PERMISSION_GRANTED
+
+            // Asked at the tap rather than at launch because this is the first
+            // thing the listener does that needs it.
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+                ContextCompat.checkSelfPermission(
+                    context,
+                    Manifest.permission.POST_NOTIFICATIONS,
+                ) != PackageManager.PERMISSION_GRANTED
+            ) {
+                notifyPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
+            }
+
+            if (needsStorage) {
+                pending = songs
+                pendingFrom = from
+                pendingChoice = resolved
+                storagePermission.launch(Manifest.permission.WRITE_EXTERNAL_STORAGE)
+            } else {
+                songs.forEach { Downloads.enqueue(context, it, from?.title, resolved) }
+                if (from != null) Downloads.markRequested(from.id, songs.map { it.videoId })
+            }
+            // A named addon was already reachable to be offered, so a second
+            // popup about another source being left out would only confuse.
+            if (resolved == null && !songs.all { Downloads.servableFromCache(it.videoId) }) {
+                SourceRegistry.addonsLeftOutOfDownloads()
+                    .firstOrNull { (config, why) -> explainedDownloadExclusions.add("${config.id}:$why") }
+                    ?.let { (config, why) -> addonLeftOut = config.displayName to why }
+            }
+        }
+        // Recorded for everything asked for, including tracks already on disk:
+        // the record is what groups them into a release on the Downloads page.
+        if (from != null && !blocked) {
+            Downloads.rememberCollection(from, requested)
+            if (!from.thumbnailUrl.isNullOrBlank()) {
+                scope.launch(Dispatchers.IO) {
+                    MediaTagger.cacheArtwork(context.applicationContext, from.thumbnailUrl)
+                        ?.let { Downloads.rememberCollectionArtwork(from.id, it) }
+                }
+            }
+        }
+        when {
+            blocked -> {
+                if (resolved?.strict == true) {
+                    // A long press promised this addon and nothing else.
+                    DownloadFailureSignal.report(
+                        resolved.addonKey,
+                        DownloadAddonCatalog.displayName(resolved.addonKey),
+                        songs.firstOrNull()?.title ?: requested.firstOrNull()?.title.orEmpty(),
+                        songs.firstOrNull()?.let { Downloads.servableFromCache(it.videoId) } == true,
+                    )
+                } else {
+                    Toast.makeText(
+                        context,
+                        context.getString(R.string.wifi_only_download_refusal),
+                        Toast.LENGTH_LONG,
+                    ).show()
+                }
+            }
+            requested.size > 1 -> {
+                val message = if (songs.isEmpty()) {
+                    context.getString(R.string.already_downloaded)
+                } else {
+                    context.resources.getQuantityString(
+                        R.plurals.downloading_song_count,
+                        songs.size,
+                        songs.size,
+                    )
+                }
+                Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
+
+    /** The Cached songs folder's buttons: save the copy already on disk. */
+    fun fromCache(songs: List<Song>, explicit: DownloadAddonChoice? = null) {
+        val cleaned = songs.map { it.copy(downloadFormat = null, localDateAddedSeconds = null) }
+        // With Automatic the cache still answers; a strict pick asks its addon
+        // and reports if the addon cannot provide the track.
+        Downloads.preferCachedCopy(cleaned.map { it.videoId })
+        start(cleaned, null, explicit)
+    }
+
+    /**
+     * Tracks asked for outside a release. A row reached through AutoPlay often
+     * has no duration; the player knows it once loaded, so backfill from there
+     * or lyrics tagging would silently skip the track.
+     */
+    fun tracks(songs: List<Song>, explicit: DownloadAddonChoice? = null) {
+        val playerSong = currentSongId()
+        val playerDuration = currentDurationMs()
+        val prepared = songs.map { song ->
+            if (song.durationMillis() <= 0L && playerSong == song.videoId && playerDuration > 0L) {
+                song.copy(durationText = formatDurationText(playerDuration))
+            } else {
+                song
+            }
+        }
+        start(prepared, null, explicit)
+    }
+
+    fun song(song: Song, explicit: DownloadAddonChoice? = null) = tracks(listOf(song), explicit)
+
+    /** The queue's multi-select Download button, which reports its own no-op. */
+    fun queue(songs: List<Song>): Boolean {
+        val requested = songs.filter { it.localUri == null }.distinctBy { it.videoId }
+        if (requested.isEmpty()) {
+            Toast.makeText(context, R.string.already_downloaded, Toast.LENGTH_SHORT).show()
+        } else {
+            start(requested, null)
+        }
+        return true
+    }
+}
 
 class MainActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -730,10 +1034,6 @@ private fun BitChordApp(
     val driveAlerts = remember { DriveBackupAlerts() }
     /** An addon search row tapped while the quality setting skips its addon; see [AddonBlockedAlert]. */
     var blockedAddonSong by remember { mutableStateOf<com.music.bitchord.data.model.Song?>(null) }
-    /** An addon a download just went ahead without, and why; see [SourceRegistry.addonsLeftOutOfDownloads]. */
-    var addonLeftOutOfDownload by remember {
-        mutableStateOf<Pair<String, SourceRegistry.DownloadExclusion>?>(null)
-    }
     var editingPartyServer by remember { mutableStateOf(false) }
     var editingSignatureApi by remember { mutableStateOf(false) }
     var librarySortMenuOpen by remember { mutableStateOf(false) }
@@ -2284,42 +2584,26 @@ private fun BitChordApp(
     }
 
     // ---- Downloads ----
-    // Two permissions, and never both on one device: writing to the shared
-    // Music folder needs storage access below API 29 and none at all from
-    // 29 on, where MediaStore grants an app its own rows; notifications are
-    // only asked for from API 33. So the branches below are mutually exclusive
-    // by SDK level, and nothing here can stack two dialogs on each other.
-    var downloadPending by remember { mutableStateOf<List<Song>>(emptyList()) }
-    /**
-     * What the pending batch was asked for as, held alongside it for the same
-     * reason: the storage-permission dialog is a round trip through another
-     * process, and the release has to survive it or a whole album granted
-     * permission arrives as forty loose tracks.
-     */
-    var downloadPendingFrom by remember { mutableStateOf<DownloadTarget?>(null) }
+    // Two permissions, never both on one device: the Music folder needs legacy
+    // storage access below API 29, notifications are asked for from 33. The
+    // controller keeps the batch alive across the storage round trip.
+    val currentPlayer = rememberUpdatedState(player)
+    val downloadLauncher = remember {
+        DownloadLauncher(
+            context = context,
+            scope = scope,
+            currentSongId = { currentPlayer.value.song?.videoId },
+            currentDurationMs = { currentPlayer.value.durationMs },
+        )
+    }
     val notifyPermission = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission(),
     ) { /* Refusing costs the progress notification, not the download. */ }
     val storagePermission = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission(),
-    ) { granted ->
-        val songs = downloadPending
-        val from = downloadPendingFrom
-        downloadPending = emptyList()
-        downloadPendingFrom = null
-        when {
-            songs.isEmpty() -> Unit
-            granted -> {
-                songs.forEach { Downloads.enqueue(context, it, from?.title) }
-                if (from != null) Downloads.markRequested(from.id, songs.map { it.videoId })
-            }
-            // The one case where refusing is fatal: below API 29 there is no
-            // other way to reach the Music folder.
-            else -> Toast
-                .makeText(context, context.getString(R.string.storage_required_save), Toast.LENGTH_SHORT)
-                .show()
-        }
-    }
+    ) { granted -> downloadLauncher.onStorageResult(granted) }
+    downloadLauncher.notifyPermission = notifyPermission
+    downloadLauncher.storagePermission = storagePermission
     val mediaPermissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission(),
     ) { granted ->
@@ -2367,145 +2651,6 @@ private fun BitChordApp(
             )
         }
     }
-    // Takes a list so a single tap on an album/playlist header can queue the
-    // whole thing — the permission dance only needs to happen once for the
-    // batch, not once per track.
-    //
-    // [from] is what the list *is*, when it is a release rather than a
-    // selection: an album or a playlist. It is recorded whole, so the Downloads
-    // page can offer the thing that was tapped back rather than the forty rows
-    // it decomposed into — see [Downloads.rememberCollection]. Null for a single
-    // track, which is not a release however many of them are asked for one at a
-    // time.
-    val startDownload: (List<Song>, DownloadTarget?) -> Unit = { requested, from ->
-        val saved = Downloads.saved.value
-        // Already on disk, and already queued or running: neither needs asking
-        // again. What's left is what a tap on "Download" actually means.
-        //
-        // The release's cover is stamped onto any row that hasn't got one, as a
-        // last check before the tap becomes a file.
-        //
-        // An album page bills its artwork once, in the header — its track rows
-        // carry no thumbnail at all, see [InnertubeParser.parseResponsiveListItem]
-        // — and a row that reaches [MediaTagger.artworkFor] with a null url is a
-        // track saved with no cover in the file and none in [SavedSongMetadata]
-        // either, so nothing downstream can draw one afterwards.
-        // `MainViewModel.withArtwork` normally fills those in as a page loads and
-        // covers the usual route here; this is the backstop for a list that
-        // reached this function some other way, and it is worth having precisely
-        // because the failure is silent and permanent — the file is written
-        // without a cover, and re-downloading adopts the untagged copy rather
-        // than replacing it.
-        val songs = requested
-            .filter { it.videoId !in saved }
-            .map { song ->
-                val cover = from?.thumbnailUrl
-                if (song.thumbnailUrl.isNullOrBlank() && !cover.isNullOrBlank()) {
-                    song.copy(thumbnailUrl = cover)
-                } else {
-                    song
-                }
-            }
-        // Asked here as well as inside [Downloads.enqueue] — not instead of it.
-        // Enqueue is the invariant and has to refuse whoever calls it, including
-        // the storage-permission continuation below, which resumes long enough
-        // after this check for the connection to have changed under it. This is
-        // the one place that knows the tap was for forty tracks and can say so
-        // once, rather than leaving forty identical failed rows to be read.
-        // A copy out of the song cache spends no data, so Wi-Fi only does not
-        // refuse a batch that has one — [Downloads.enqueue] still refuses the
-        // tracks in it that would need the network.
-        val blocked = songs.isNotEmpty() && !AppSettings.downloadsAllowedNow &&
-            songs.none { Downloads.servableFromCache(it.videoId) }
-        if (songs.isNotEmpty() && !blocked) {
-            val needsStorage = AppSettings.exportDownloads.value && DownloadStore.needsLegacyPermission() &&
-                ContextCompat.checkSelfPermission(
-                    context,
-                    Manifest.permission.WRITE_EXTERNAL_STORAGE,
-                ) != PackageManager.PERMISSION_GRANTED
-
-            // Asked for here rather than at launch because here is where it means
-            // something: a download is the first thing this app does that the user
-            // is expected to walk away from.
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
-                ContextCompat.checkSelfPermission(
-                    context,
-                    Manifest.permission.POST_NOTIFICATIONS,
-                ) != PackageManager.PERMISSION_GRANTED
-            ) {
-                notifyPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
-            }
-
-            if (needsStorage) {
-                downloadPending = songs
-                downloadPendingFrom = from
-                storagePermission.launch(Manifest.permission.WRITE_EXTERNAL_STORAGE)
-            } else {
-                songs.forEach { Downloads.enqueue(context, it, from?.title) }
-                if (from != null) Downloads.markRequested(from.id, songs.map { it.videoId })
-            }
-            // Said once per addon and reason per session, and only for a batch
-            // that will reach the sources at all — a copy out of the song cache
-            // never asks them. Without it the addon was passed over in silence
-            // and the file simply arrived from JioSaavn or YouTube.
-            if (!songs.all { Downloads.servableFromCache(it.videoId) }) {
-                SourceRegistry.addonsLeftOutOfDownloads()
-                    .firstOrNull { (config, why) -> explainedDownloadExclusions.add("${config.id}:$why") }
-                    ?.let { (config, why) -> addonLeftOutOfDownload = config.displayName to why }
-            }
-        }
-        // Recorded for everything that was asked for, not just what still has to
-        // be fetched: a release whose tracks are already on the device is still
-        // that release, and the point of the record is to group them. Skipped
-        // only when the whole batch was refused, since then there will be
-        // nothing on disk for it to group.
-        if (from != null && !blocked) {
-            Downloads.rememberCollection(from, requested)
-            // A collection cover is not part of any audio file. Cache the
-            // header image separately so its Downloads card still has artwork
-            // with no connection, then atomically replace the remote URL in
-            // the persisted collection record.
-            if (!from.thumbnailUrl.isNullOrBlank()) {
-                scope.launch(Dispatchers.IO) {
-                    MediaTagger.cacheArtwork(context.applicationContext, from.thumbnailUrl)
-                        ?.let { Downloads.rememberCollectionArtwork(from.id, it) }
-                }
-            }
-        }
-        when {
-            // The row's own icon reports a queued download, so a single tap
-            // normally needs no toast — but a refused one leaves the row exactly
-            // as it was, and a button that visibly does nothing is worse than a
-            // long message. So this one is said whatever the count.
-            blocked -> Toast.makeText(
-                context,
-                context.getString(R.string.wifi_only_download_refusal),
-                Toast.LENGTH_LONG,
-            ).show()
-            requested.size > 1 -> {
-                val message = if (songs.isEmpty()) {
-                    context.getString(R.string.already_downloaded)
-                } else {
-                    context.resources.getQuantityString(
-                        R.plurals.downloading_song_count,
-                        songs.size,
-                        songs.size,
-                    )
-                }
-                Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
-            }
-        }
-    }
-    // The Cached songs folder's download buttons. The song cache already holds
-    // these tracks, so they are saved from its copy — no data spent, no
-    // connection needed — rather than fetched afresh at the Download quality
-    // setting. See [Downloads.preferCachedCopy]. The folder's own second line
-    // ("YouTube · 4.2 MB") is the cache's, not the file's, and stays behind.
-    val downloadFromCache: (List<Song>) -> Unit = { songs ->
-        val cleaned = songs.map { it.copy(downloadFormat = null, localDateAddedSeconds = null) }
-        Downloads.preferCachedCopy(cleaned.map { it.videoId })
-        startDownload(cleaned, null)
-    }
     val removedFromCacheMessage = stringResource(R.string.removed_from_cache)
     // Takes tracks out of the song cache — the folder's selection, or one
     // song's menu. The open folder re-reads itself off [AudioCache.contentsChanged].
@@ -2515,27 +2660,6 @@ private fun BitChordApp(
             if (removed > 0) showQueueNotice(removedFromCacheMessage)
         }
     }
-    /**
-     * One track on its own, which is never a release.
-     *
-     * A track reached through AutoPlay or a radio queue often has no duration
-     * string at all — YouTube's watch-queue rows don't always send
-     * `lengthText` — while the player itself knows exactly how long the same
-     * track runs once it has loaded. Backfilled from there when it's the song
-     * on screen, so downloading it isn't handed a duration of zero and
-     * silently skipped for lyrics — see [LyricsTag.forTrack].
-     */
-    val downloadSong: (Song) -> Unit = { song ->
-        val withDuration = if (song.durationMillis() <= 0L &&
-            player.song?.videoId == song.videoId && player.durationMs > 0L
-        ) {
-            song.copy(durationText = formatDurationText(player.durationMs))
-        } else {
-            song
-        }
-        startDownload(listOf(withDuration), null)
-    }
-
     val performQueueBulkAction: suspend (List<Song>, QueueBulkAction) -> Boolean = { songs, action ->
         try {
             when (action) {
@@ -2556,7 +2680,7 @@ private fun BitChordApp(
                     val requested = songs.filter { it.localUri == null }.distinctBy { it.videoId }
                     if (requested.isEmpty()) {
                         Toast.makeText(context, R.string.already_downloaded, Toast.LENGTH_SHORT).show()
-                    } else startDownload(requested, null)
+                    } else downloadLauncher.queue(requested)
                     true
                 }
             }
@@ -2830,6 +2954,9 @@ private fun BitChordApp(
             },
             onQueueSwipeToQueue = { index, queueSong -> controller?.moveQueueEntryToUser(index, queueSong) ?: false },
             onQueueBulkAction = performQueueBulkAction,
+            onQueueDownloadAddonChoice = { songs ->
+                downloadLauncher.chooseAddon(songs, fromCache = false)
+            },
             onQueueRemoveEntries = { entries ->
                 controller?.removeQueueEntriesWithUndo(entries)
                 Unit
@@ -3436,7 +3563,10 @@ private fun BitChordApp(
                                     } else {
                                         null
                                     },
-                                    onDownload = if (isCache) downloadFromCache else null,
+                                    onDownload = if (isCache) { songs -> downloadLauncher.fromCache(songs) } else null,
+                                    onDownloadAddonChoice = if (isCache) { songs ->
+                                        downloadLauncher.chooseAddon(songs, fromCache = true)
+                                    } else null,
                                     onRemoveFromCache = if (isCache) removeFromCache else null,
                                     tabs = if (isDevice) LocalFolderTab.DEVICE else LocalFolderTab.BASIC,
                                     playlists = if (isDevice) offlinePlaylistGroups else emptyList(),
@@ -4755,10 +4885,18 @@ private fun BitChordApp(
                 // download — the same as the row's download button there.
                 onDownload = {
                     if (!fromPlayer && detail?.browseId == CACHE_FOLDER_BROWSE_ID) {
-                        downloadFromCache(listOf(song))
+                        downloadLauncher.fromCache(listOf(song))
                     } else {
-                        downloadSong(song)
+                        downloadLauncher.song(song)
                     }
+                },
+                // Long press the Download row: one-shot addon choice, even
+                // for a song the cache could have answered.
+                onDownloadAddonChoice = {
+                    downloadLauncher.chooseAddon(
+                        songs = listOf(song),
+                        fromCache = !fromPlayer && detail?.browseId == CACHE_FOLDER_BROWSE_ID,
+                    )
                 },
                 // The other direction: a device file going up to the
                 // server. Closed first, unlike a download — progress and
@@ -5536,7 +5674,7 @@ private fun BitChordApp(
                 // release's own name and cover, which is exactly what the
                 // record wants.
                 onDownloadAll = act { songs ->
-                    startDownload(
+                    downloadLauncher.start(
                         songs,
                         target.browseId
                             ?.takeIf { target.type != BrowseType.ARTIST }
@@ -5550,6 +5688,12 @@ private fun BitChordApp(
                                 )
                             },
                     )
+                }.takeIf { downloadable },
+                // Long press the same row for a one-shot addon choice. `act`
+                // fetches a card's track list before asking, exactly as the
+                // ordinary tap does.
+                onDownloadAllAddonChoice = act { songs ->
+                    downloadLauncher.chooseAddon(songs, fromCache = false)
                 }.takeIf { downloadable },
                 // The same link a share off YouTube Music's own overflow
                 // gives — built from the browse id rather than fetched,
@@ -6381,29 +6525,18 @@ private fun BitChordApp(
         // Over the page and its frosted bars, under nothing but the alerts.
         DacVolumeHud(hazeState)
 
+        // Chosen-addon chooser, failure and skip notices all live with the
+        // launcher: this screen is at the JVM's method-size limit.
+        downloadLauncher.DownloadAlerts(
+            hazeState = hazeState,
+            behindOtherWindow = playerRaised || songActions != null || browseActions != null,
+        )
+
         blockedAddonSong?.let { song ->
             AddonBlockedAlert(
                 hazeState = hazeState,
                 song = song,
                 onDismiss = { blockedAddonSong = null },
-            )
-        }
-
-        addonLeftOutOfDownload?.let { (addon, why) ->
-            InfoAlert(
-                hazeState = hazeState,
-                title = stringResource(R.string.download_addon_left_out_title, addon),
-                description = when (why) {
-                    SourceRegistry.DownloadExclusion.DOWNLOADS_NOT_ALLOWED ->
-                        stringResource(R.string.download_addon_not_allowed, addon)
-                    SourceRegistry.DownloadExclusion.NEEDS_LOSSLESS_OUTPUT ->
-                        stringResource(R.string.download_addon_needs_lossless_output, addon)
-                },
-                onDismiss = { addonLeftOutOfDownload = null },
-                // A download can be asked for from the player or from either
-                // menu, and each is a window of its own over this one. Drawn
-                // here, the alert opened behind whichever it was.
-                inOwnWindow = playerRaised || songActions != null || browseActions != null,
             )
         }
 
