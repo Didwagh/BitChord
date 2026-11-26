@@ -330,7 +330,10 @@ object PlaylistSync {
         }
         // Already on the device for some other reason: joins the playlist
         // without being fetched again.
-        val saved = Downloads.saved.value
+        // A deleted file must not keep a playlist track from being fetched
+        // again; the saved map is a claim, and this job is the one place that
+        // can afford to check it before deciding nothing needs doing.
+        val saved = Downloads.liveSavedIds(context, fresh.map { it.videoId })
         val (onDevice, missing) = fresh.partition { it.videoId in saved }
         val cover = listing.cover ?: record.thumbnailUrl?.takeIf { it.startsWith("http") }
         val fetch = missing.map { song ->

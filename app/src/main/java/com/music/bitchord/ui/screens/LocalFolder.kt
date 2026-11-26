@@ -1,5 +1,6 @@
 package com.music.bitchord.ui.screens
 
+import android.net.Uri
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -50,6 +51,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -57,6 +59,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
@@ -915,10 +918,18 @@ private fun RowDownloadButton(
     onDownloadAddonChoice: (() -> Unit)? = null,
     onDownload: () -> Unit,
 ) {
+    val context = LocalContext.current
     val active by Downloads.active.collectAsStateWithLifecycle()
     val saved by Downloads.saved.collectAsStateWithLifecycle()
     val state = active[song.videoId]
-    val done = state == null && song.videoId in saved
+    // The saved map only claims a file exists. The listener can delete it with
+    // a file manager while the app is open, and a stale claim used to leave
+    // this button permanently on "downloaded" with nothing to tap.
+    val recorded = saved[song.videoId]
+    val file by produceState(recorded?.let(Uri::parse), song.videoId, recorded) {
+        value = Downloads.savedUri(context, song.videoId)
+    }
+    val done = state == null && file != null
     Box(
         modifier = Modifier
             .size(36.dp)

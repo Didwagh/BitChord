@@ -184,6 +184,10 @@ class BitChordApplication : Application(), SingletonImageLoader.Factory, Configu
         // What's already saved to Downloads, so the song menu can say so
         // without a media-store query per row.
         Downloads.init(this)
+        // The record survives the listener deleting a file with a file manager.
+        // Settle that before any UI can offer a Download tap for a file that
+        // only exists in the saved map.
+        Downloads.pruneMissing(this)
         // After both of the things a check reads: the setting and the record.
         PlaylistSync.init(this)
         // Before anything could run a scheduled backup: its worker reads the

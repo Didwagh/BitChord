@@ -393,6 +393,55 @@ object Downloads {
     }
 
     /**
+     * Which of [saved] still name a file. Pure so the rule can be tested without
+     * a ContentResolver; [exists] is handed the stored uri string.
+     */
+    internal fun liveSavedIdsFrom(
+        saved: Map<String, String>,
+        exists: (String) -> Boolean,
+    ): Set<String> = saved.filterValues(exists).keys.toSet()
+
+    /**
+     * The ids in [ids] that really are on disk, pruning any record whose file
+     * the listener deleted behind the app's back.
+     *
+     * A Download tap must check this rather than read [saved] directly: a stale
+     * entry used to make the tap look dead, because it was filtered out as
+     * "already downloaded" before the queue ever saw it. Playback also prunes
+     * stale records when it fails to open one, but by then the listener may
+     * already have tapped Download again.
+     *
+     * Touches the filesystem, so call it off the main thread.
+     */
+    suspend fun liveSavedIds(context: Context, ids: Collection<String>): Set<String> =
+        withContext(Dispatchers.IO) {
+            val wanted = ids.toSet()
+            val recorded = _saved.value.filterKeys { it in wanted }
+            val live = liveSavedIdsFrom(recorded) { uri -> DownloadStore.exists(context, uri.toUri()) }
+            val missing = recorded.keys - live
+            if (missing.isNotEmpty()) {
+                Log.d(TAG, "forgetting ${missing.size} downloaded file(s) that are gone")
+                record(saved = { it - missing }, meta = { it - missing })
+            }
+            live
+        }
+
+    /**
+     * Drop saved records whose files are gone, once at startup.
+     *
+     * Without this the Downloads shelf and every Download row can say "saved"
+     * for a file the listener removed with a file manager, and stay that way
+     * until something tries to play it. Called on the app's startup thread,
+     * which is already off the main thread.
+     */
+    fun pruneMissing(context: Context) {
+        val missing = _saved.value.filterValues { uri -> !DownloadStore.exists(context, uri.toUri()) }.keys
+        if (missing.isEmpty()) return
+        Log.d(TAG, "forgetting ${missing.size} downloaded file(s) that are gone")
+        record(saved = { it - missing }, meta = { it - missing })
+    }
+
+    /**
      * True when [uriString] names a `file://` path that is not there.
      *
      * Deliberately answers only for `file://`, and deliberately cheaply: this is

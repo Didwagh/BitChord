@@ -599,101 +599,111 @@ private class DownloadLauncher(
         from: DownloadTarget?,
         choice: DownloadAddonChoice? = null,
     ) {
-        val resolved = effectiveAddonChoice(choice)
-        val saved = Downloads.saved.value
-        // An album page bills its artwork in the header: its rows carry no
-        // cover, and a download written without one cannot adopt it later.
-        val songs = requested
-            .filter { DownloadAddonPreference.shouldAttempt(resolved, it.videoId, saved.keys) }
-            .map { song ->
-                val cover = from?.thumbnailUrl
-                if (song.thumbnailUrl.isNullOrBlank() && !cover.isNullOrBlank()) {
-                    song.copy(thumbnailUrl = cover)
-                } else {
-                    song
+        scope.launch {
+            // The saved map is a claim about a folder the listener manages, not
+            // a promise the file is still there. Check before treating a tap as
+            // a duplicate, or a file deleted outside the app makes Download a
+            // dead button. [liveSavedIds] prunes what it finds missing and the
+            // rest of this runs back on the main thread, where permission
+            // launchers and Toasts belong.
+            val saved = withContext(Dispatchers.IO) {
+                Downloads.liveSavedIds(context, requested.map { it.videoId })
+            }
+            val resolved = effectiveAddonChoice(choice)
+            // An album page bills its artwork in the header: its rows carry no
+            // cover, and a download written without one cannot adopt it later.
+            val songs = requested
+                .filter { DownloadAddonPreference.shouldAttempt(resolved, it.videoId, saved) }
+                .map { song ->
+                    val cover = from?.thumbnailUrl
+                    if (song.thumbnailUrl.isNullOrBlank() && !cover.isNullOrBlank()) {
+                        song.copy(thumbnailUrl = cover)
+                    } else {
+                        song
+                    }
                 }
-            }
-        // Checked here as well as in [Downloads.enqueue], which has to refuse
-        // every caller. Only the tap knows the batch size, so only here can a
-        // Wi-Fi refusal be said once. A saved default can still use a cached
-        // copy; a strict pick cannot.
-        val blocked = songs.isNotEmpty() && !AppSettings.downloadsAllowedNow &&
-            (resolved?.strict == true || songs.none { Downloads.servableFromCache(it.videoId) })
-        if (songs.isNotEmpty() && !blocked) {
-            val needsStorage = AppSettings.exportDownloads.value && DownloadStore.needsLegacyPermission() &&
-                ContextCompat.checkSelfPermission(
-                    context,
-                    Manifest.permission.WRITE_EXTERNAL_STORAGE,
-                ) != PackageManager.PERMISSION_GRANTED
-
-            // Asked at the tap rather than at launch because this is the first
-            // thing the listener does that needs it.
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
-                ContextCompat.checkSelfPermission(
-                    context,
-                    Manifest.permission.POST_NOTIFICATIONS,
-                ) != PackageManager.PERMISSION_GRANTED
-            ) {
-                notifyPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
-            }
-
-            if (needsStorage) {
-                pending = songs
-                pendingFrom = from
-                pendingChoice = resolved
-                storagePermission.launch(Manifest.permission.WRITE_EXTERNAL_STORAGE)
-            } else {
-                songs.forEach { Downloads.enqueue(context, it, from?.title, resolved) }
-                if (from != null) Downloads.markRequested(from.id, songs.map { it.videoId })
-            }
-            // A named addon was already reachable to be offered, so a second
-            // popup about another source being left out would only confuse.
-            if (resolved == null && !songs.all { Downloads.servableFromCache(it.videoId) }) {
-                SourceRegistry.addonsLeftOutOfDownloads()
-                    .firstOrNull { (config, why) -> explainedDownloadExclusions.add("${config.id}:$why") }
-                    ?.let { (config, why) -> addonLeftOut = config.displayName to why }
-            }
-        }
-        // Recorded for everything asked for, including tracks already on disk:
-        // the record is what groups them into a release on the Downloads page.
-        if (from != null && !blocked) {
-            Downloads.rememberCollection(from, requested)
-            if (!from.thumbnailUrl.isNullOrBlank()) {
-                scope.launch(Dispatchers.IO) {
-                    MediaTagger.cacheArtwork(context.applicationContext, from.thumbnailUrl)
-                        ?.let { Downloads.rememberCollectionArtwork(from.id, it) }
-                }
-            }
-        }
-        when {
-            blocked -> {
-                if (resolved?.strict == true) {
-                    // A long press promised this addon and nothing else.
-                    DownloadFailureSignal.report(
-                        resolved.addonKey,
-                        DownloadAddonCatalog.displayName(resolved.addonKey),
-                        songs.firstOrNull()?.title ?: requested.firstOrNull()?.title.orEmpty(),
-                        songs.firstOrNull()?.let { Downloads.servableFromCache(it.videoId) } == true,
-                    )
-                } else {
-                    Toast.makeText(
+            // Checked here as well as in [Downloads.enqueue], which has to refuse
+            // every caller. Only the tap knows the batch size, so only here can a
+            // Wi-Fi refusal be said once. A saved default can still use a cached
+            // copy; a strict pick cannot.
+            val blocked = songs.isNotEmpty() && !AppSettings.downloadsAllowedNow &&
+                (resolved?.strict == true || songs.none { Downloads.servableFromCache(it.videoId) })
+            if (songs.isNotEmpty() && !blocked) {
+                val needsStorage = AppSettings.exportDownloads.value && DownloadStore.needsLegacyPermission() &&
+                    ContextCompat.checkSelfPermission(
                         context,
-                        context.getString(R.string.wifi_only_download_refusal),
-                        Toast.LENGTH_LONG,
-                    ).show()
+                        Manifest.permission.WRITE_EXTERNAL_STORAGE,
+                    ) != PackageManager.PERMISSION_GRANTED
+
+                // Asked at the tap rather than at launch because this is the first
+                // thing the listener does that needs it.
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+                    ContextCompat.checkSelfPermission(
+                        context,
+                        Manifest.permission.POST_NOTIFICATIONS,
+                    ) != PackageManager.PERMISSION_GRANTED
+                ) {
+                    notifyPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
+                }
+
+                if (needsStorage) {
+                    pending = songs
+                    pendingFrom = from
+                    pendingChoice = resolved
+                    storagePermission.launch(Manifest.permission.WRITE_EXTERNAL_STORAGE)
+                } else {
+                    songs.forEach { Downloads.enqueue(context, it, from?.title, resolved) }
+                    if (from != null) Downloads.markRequested(from.id, songs.map { it.videoId })
+                }
+                // A named addon was already reachable to be offered, so a second
+                // popup about another source being left out would only confuse.
+                if (resolved == null && !songs.all { Downloads.servableFromCache(it.videoId) }) {
+                    SourceRegistry.addonsLeftOutOfDownloads()
+                        .firstOrNull { (config, why) -> explainedDownloadExclusions.add("${config.id}:$why") }
+                        ?.let { (config, why) -> addonLeftOut = config.displayName to why }
                 }
             }
-            requested.size > 1 -> {
-                val message = if (songs.isEmpty()) {
-                    context.getString(R.string.already_downloaded)
-                } else {
-                    context.resources.getQuantityString(
-                        R.plurals.downloading_song_count,
-                        songs.size,
-                        songs.size,
-                    )
+            // Recorded for everything asked for, including tracks already on disk:
+            // the record is what groups them into a release on the Downloads page.
+            if (from != null && !blocked) {
+                Downloads.rememberCollection(from, requested)
+                if (!from.thumbnailUrl.isNullOrBlank()) {
+                    scope.launch(Dispatchers.IO) {
+                        MediaTagger.cacheArtwork(context.applicationContext, from.thumbnailUrl)
+                            ?.let { Downloads.rememberCollectionArtwork(from.id, it) }
+                    }
                 }
-                Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
+            }
+            when {
+                blocked -> {
+                    if (resolved?.strict == true) {
+                        // A long press promised this addon and nothing else.
+                        DownloadFailureSignal.report(
+                            resolved.addonKey,
+                            DownloadAddonCatalog.displayName(resolved.addonKey),
+                            songs.firstOrNull()?.title ?: requested.firstOrNull()?.title.orEmpty(),
+                            songs.firstOrNull()?.let { Downloads.servableFromCache(it.videoId) } == true,
+                        )
+                    } else {
+                        Toast.makeText(
+                            context,
+                            context.getString(R.string.wifi_only_download_refusal),
+                            Toast.LENGTH_LONG,
+                        ).show()
+                    }
+                }
+                requested.size > 1 -> {
+                    val message = if (songs.isEmpty()) {
+                        context.getString(R.string.already_downloaded)
+                    } else {
+                        context.resources.getQuantityString(
+                            R.plurals.downloading_song_count,
+                            songs.size,
+                            songs.size,
+                        )
+                    }
+                    Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
+                }
             }
         }
     }

@@ -324,6 +324,24 @@ class DownloadSessionTest {
         assertTrue(Downloads.savedReleases(onDiskMap("unrelated")).isEmpty())
     }
 
+    /**
+     * The tap path used to trust this map blindly, so a file deleted outside
+     * the app turned Download into a no-op. The pure half of the check is what
+     * makes sure a stale record can never count as on disk.
+     */
+    @Test
+    fun `a saved id whose file is gone is not a downloaded id`() {
+        val saved = mapOf(
+            "here" to "content://media/external/audio/media/1",
+            "gone" to "content://media/external/audio/media/2",
+        )
+        assertEquals(
+            setOf("here"),
+            Downloads.liveSavedIdsFrom(saved) { it == saved.getValue("here") },
+        )
+        assertTrue(Downloads.liveSavedIdsFrom(saved) { true } == saved.keys)
+    }
+
     @Test
     fun `cards are in name order, whatever order they were downloaded in`() {
         listOf("Zephyr", "anthems", "Morning").forEach { title ->
